@@ -25,7 +25,7 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const BACKEND_WS = "ws://localhost:8000/ws/transcribe";
+const API_URL = import.meta.env.VITE_API_URL || "https://o2yjxdyvpy4ilif7grgtzbp4vi0fxbjm.lambda-url.us-east-1.on.aws/";
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600);
@@ -263,58 +263,44 @@ export default function App() {
   };
 
   // ===== TRANSCRIPTION =====
-  const startTranscription = useCallback(() => {
+  const startTranscription = useCallback(async () => {
     if (!file) return;
 
     setStatus("processing");
-    setStatusMessage("Connexion au serveur...");
+    setStatusMessage("Envoi de l'audio au serveur...");
     setTranscription("");
     setSegments([]);
 
-    const ws = new WebSocket(BACKEND_WS);
-    wsRef.current = ws;
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+      );
 
-    ws.onopen = () => {
-      setStatusMessage("Envoi du fichier...");
-      ws.send(file);
-    };
+      setStatusMessage("Transcription en cours...");
 
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case "status":
-          setStatusMessage(msg.message);
-          break;
-        case "info":
-          setDuration(msg.total_duration);
-          setProgress({ chunk: 0, total: msg.total_chunks });
-          break;
-        case "progress":
-          setProgress({ chunk: msg.chunk, total: msg.total_chunks });
-          setStatusMessage(msg.message);
-          break;
-        case "partial":
-          setTranscription((prev) => (prev ? prev + " " : "") + msg.text);
-          setSegments((prev) => [...prev, ...msg.segments]);
-          break;
-        case "complete":
-          setStatus("done");
-          setStatusMessage("Transcription terminée !");
-          setDuration(msg.duration);
-          break;
-        case "error":
-          setStatus("error");
-          setStatusMessage(`Erreur: ${msg.message}`);
-          break;
+      const response = await fetch(API_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/octet-stream" },
+        body: arrayBuffer,
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
+        throw new Error(err.error || `HTTP ${response.status}`);
       }
-    };
 
-    ws.onerror = () => {
+      const result = await response.json();
+
+      setTranscription(result.text || "");
+      setSegments(result.segments || []);
+      setDuration(result.duration || 0);
+      setStatus("done");
+      setStatusMessage("Transcription terminée !");
+    } catch (err) {
       setStatus("error");
-      setStatusMessage("Erreur de connexion. Vérifiez que le backend est lancé.");
-    };
-
-    ws.onclose = () => { wsRef.current = null; };
+      setStatusMessage(`Erreur: ${err.message}`);
+    }
   }, [file]);
 
   const cancelTranscription = () => {
