@@ -1,0 +1,8 @@
+torch
+transformers==4.46.0
+peft
+accelerate
+librosa
+soundfile
+numpy
+spaces

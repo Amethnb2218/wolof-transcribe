@@ -1,0 +1,33 @@
+============================================
+FIX 1 : Cellule "10. Charger le processeur"
+============================================
+Remplace TOUT le contenu de la cellule par :
+
+#@title 10. Charger le processeur Whisper
+from transformers import (
+    WhisperFeatureExtractor,
+    WhisperTokenizer,
+    WhisperProcessor,
+    WhisperForConditionalGeneration,
+)
+
+feature_extractor = WhisperFeatureExtractor.from_pretrained(BASE_MODEL)
+tokenizer = WhisperTokenizer.from_pretrained(BASE_MODEL, language="french", task="transcribe")
+processor = WhisperProcessor.from_pretrained(BASE_MODEL, language="french", task="transcribe")
+
+print("Processor charge")
+
+
+============================================
+FIX 2 : Cellule "15. Charger Whisper Large-V3"
+============================================
+Remplace cette ligne :
+model.generation_config.language = "wo"
+
+Par :
+model.generation_config.language = "fr"
+
+
+============================================
+APRES : Execution > Tout executer (Ctrl+F9)
+============================================

@@ -1,0 +1,29 @@
+============================================
+AJOUTE CETTE CELLULE JUSTE AVANT la cellule "13. Pretraiter le dataset"
+(clique + Code entre les deux cellules)
+============================================
+Copie-colle ce code :
+
+#@title FIX: Phase 1 - 80K exemples
+import shutil, os
+
+# Liberer le cache
+cache_dir = os.path.expanduser("~/.cache/huggingface")
+if os.path.exists(cache_dir):
+    shutil.rmtree(cache_dir)
+    print("Cache libere")
+
+# Phase 1: premiers 80,000
+dataset["train"] = dataset["train"].select(range(80000))
+dataset["test"] = dataset["test"].select(range(5000))
+
+total, used, free = shutil.disk_usage("/")
+print(f"Espace libre: {free / 1e9:.1f} GB")
+print(f"Phase 1: {len(dataset['train']):,} train (~155h)")
+print(f"\nPhase 2: tu relanceras plus tard avec le reste")
+
+
+============================================
+ENSUITE : Execute a partir de cette cellule
+(Clic sur la cellule > Execution > Executer a partir de cette cellule)
+============================================

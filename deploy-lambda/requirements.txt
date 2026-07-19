@@ -1,0 +1,4 @@
+faster-whisper==1.1.0
+huggingface_hub
+numpy<2
+soundfile
