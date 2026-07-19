@@ -6,7 +6,7 @@ import tempfile
 from faster_whisper import WhisperModel
 from huggingface_hub import snapshot_download
 
-MODEL_ID = "momosl/whisper-wolof-v1"
+MODEL_ID = "momosl/whisper-wolof-v1-ct2"
 MODEL_DIR = "/tmp/model"
 model = None
 
