@@ -28,6 +28,7 @@ import "./App.css";
 
 const LAMBDA_URL = "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
 const LOCAL_URL = "http://localhost:8000/";
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
 let API_URL = import.meta.env.VITE_API_URL || LAMBDA_URL;
 
 fetch(LOCAL_URL + "api/health", { signal: AbortSignal.timeout(2000) })
@@ -274,87 +275,7 @@ export default function App() {
   };
 
   // ===== TRANSCRIPTION WITH CHUNKING (up to 5h) =====
-  const CHUNK_DURATION = 300; // 5 minutes per chunk
-
-  const splitAudioIntoChunks = async (audioFile) => {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    const arrayBuffer = await audioFile.arrayBuffer();
-    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-    const totalDuration = audioBuffer.duration;
-    const sampleRate = audioBuffer.sampleRate;
-    const numChannels = audioBuffer.numberOfChannels;
-    const chunks = [];
-
-    for (let start = 0; start < totalDuration; start += CHUNK_DURATION) {
-      const end = Math.min(start + CHUNK_DURATION, totalDuration);
-      const startSample = Math.floor(start * sampleRate);
-      const endSample = Math.floor(end * sampleRate);
-      const length = endSample - startSample;
-
-      const offlineCtx = new OfflineAudioContext(numChannels, length, sampleRate);
-      const source = offlineCtx.createBufferSource();
-      const chunkBuffer = offlineCtx.createBuffer(numChannels, length, sampleRate);
-
-      for (let ch = 0; ch < numChannels; ch++) {
-        const channelData = audioBuffer.getChannelData(ch);
-        chunkBuffer.getChannelData(ch).set(channelData.slice(startSample, endSample));
-      }
-
-      source.buffer = chunkBuffer;
-      source.connect(offlineCtx.destination);
-      source.start();
-
-      const rendered = await offlineCtx.startRendering();
-      const wavBlob = audioBufferToWav(rendered);
-      chunks.push({ blob: wavBlob, startTime: start, endTime: end });
-    }
-
-    audioContext.close();
-    return { chunks, totalDuration };
-  };
-
-  const audioBufferToWav = (buffer) => {
-    const numChannels = buffer.numberOfChannels;
-    const sampleRate = buffer.sampleRate;
-    const format = 1; // PCM
-    const bitDepth = 16;
-    const bytesPerSample = bitDepth / 8;
-    const blockAlign = numChannels * bytesPerSample;
-    const dataLength = buffer.length * blockAlign;
-    const headerLength = 44;
-    const totalLength = headerLength + dataLength;
-    const arrayBuffer = new ArrayBuffer(totalLength);
-    const view = new DataView(arrayBuffer);
-
-    const writeString = (offset, str) => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-    };
-
-    writeString(0, "RIFF");
-    view.setUint32(4, totalLength - 8, true);
-    writeString(8, "WAVE");
-    writeString(12, "fmt ");
-    view.setUint32(16, 16, true);
-    view.setUint16(20, format, true);
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * blockAlign, true);
-    view.setUint16(32, blockAlign, true);
-    view.setUint16(34, bitDepth, true);
-    writeString(36, "data");
-    view.setUint32(40, dataLength, true);
-
-    let offset = 44;
-    for (let i = 0; i < buffer.length; i++) {
-      for (let ch = 0; ch < numChannels; ch++) {
-        const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
-        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
-        offset += 2;
-      }
-    }
-
-    return new Blob([arrayBuffer], { type: "audio/wav" });
-  };
+  const CHUNK_SIZE = 15 * 1024 * 1024; // 15 MB per chunk
 
   const startTranscription = useCallback(async () => {
     if (!file) return;
@@ -367,14 +288,14 @@ export default function App() {
 
     try {
       const fileSize = file.size;
-      const isSmallFile = fileSize < 20 * 1024 * 1024; // < 20MB
+      const contentType = file.type || "application/octet-stream";
 
-      if (isSmallFile) {
+      if (fileSize <= CHUNK_SIZE) {
         setStatusMessage("Transcription en cours...");
         const arrayBuffer = await file.arrayBuffer();
         const response = await fetch(API_URL, {
           method: "POST",
-          headers: { "Content-Type": "application/octet-stream" },
+          headers: { "Content-Type": contentType },
           body: arrayBuffer,
         });
         if (!response.ok) {
@@ -386,45 +307,49 @@ export default function App() {
         setSegments(result.segments || []);
         setDuration(result.duration || 0);
       } else {
-        setStatusMessage("Decoupage de l'audio en segments...");
-        const { chunks, totalDuration } = await splitAudioIntoChunks(file);
-        setProgress({ chunk: 0, total: chunks.length });
-        setDuration(totalDuration);
+        const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
+        setProgress({ chunk: 0, total: totalChunks });
 
         let allSegments = [];
         let allText = "";
+        let cumulativeDuration = 0;
 
-        for (let i = 0; i < chunks.length; i++) {
-          setProgress({ chunk: i + 1, total: chunks.length });
-          setStatusMessage(`Transcription segment ${i + 1}/${chunks.length}...`);
+        for (let i = 0; i < totalChunks; i++) {
+          setProgress({ chunk: i + 1, total: totalChunks });
+          setStatusMessage(`Transcription partie ${i + 1}/${totalChunks}...`);
 
-          const chunkArrayBuffer = await chunks[i].blob.arrayBuffer();
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, fileSize);
+          const chunkBlob = file.slice(start, end);
+          const chunkBuffer = await chunkBlob.arrayBuffer();
+
           const response = await fetch(API_URL, {
             method: "POST",
-            headers: { "Content-Type": "audio/wav" },
-            body: chunkArrayBuffer,
+            headers: { "Content-Type": contentType },
+            body: chunkBuffer,
           });
 
           if (!response.ok) {
             const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
-            throw new Error(err.error || `Erreur segment ${i + 1}: HTTP ${response.status}`);
+            throw new Error(err.error || `Erreur partie ${i + 1}: HTTP ${response.status}`);
           }
 
           const result = await response.json();
-          const offsetTime = chunks[i].startTime;
 
           if (result.segments) {
             const offsetSegments = result.segments.map((seg) => ({
               ...seg,
-              start: seg.start + offsetTime,
-              end: seg.end + offsetTime,
+              start: seg.start + cumulativeDuration,
+              end: seg.end + cumulativeDuration,
             }));
             allSegments = [...allSegments, ...offsetSegments];
           }
           allText += (result.text || "") + " ";
+          cumulativeDuration += result.duration || 0;
 
           setTranscription(allText.trim());
           setSegments([...allSegments]);
+          setDuration(cumulativeDuration);
         }
       }
 
@@ -435,6 +360,13 @@ export default function App() {
       setStatusMessage(`Erreur: ${err.message}`);
     }
   }, [file]);
+
+  // Auto-translate after transcription completes
+  useEffect(() => {
+    if (status === "done" && transcription && !translatedText) {
+      translateText();
+    }
+  }, [status, transcription]);
 
   const cancelTranscription = () => {
     if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
@@ -463,23 +395,36 @@ export default function App() {
     setEditText("");
   };
 
-  // ===== TRANSLATION =====
+  // ===== TRANSLATION (via Groq LLM) =====
   const translateText = async () => {
     if (!transcription) return;
     setTranslating(true);
     setShowTranslation(true);
     setTranslatedText("");
+    const langNames = { fr: "francais", en: "anglais", ar: "arabe", es: "espagnol", pt: "portugais" };
+    const targetName = langNames[translationLang] || "francais";
     try {
-      const res = await fetch(API_URL + "api/translate", {
+      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: transcription, target_lang: translationLang }),
+        headers: {
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          messages: [
+            { role: "system", content: `Tu es un traducteur expert wolof. Traduis le texte wolof suivant en ${targetName}. Retourne UNIQUEMENT la traduction, rien d'autre.` },
+            { role: "user", content: transcription },
+          ],
+          temperature: 0.3,
+          max_tokens: 4096,
+        }),
       });
       if (!res.ok) throw new Error("Erreur traduction");
       const data = await res.json();
-      setTranslatedText(data.translated_text || data.text || "");
+      setTranslatedText(data.choices[0].message.content.trim());
     } catch {
-      setTranslatedText("[Erreur de traduction — vérifiez le serveur local]");
+      setTranslatedText("[Erreur de traduction]");
     }
     setTranslating(false);
   };
@@ -871,15 +816,15 @@ export default function App() {
               </div>
             )}
 
-            {/* Translation Section */}
+            {/* Translation Section - Auto-displayed */}
             {status === "done" && transcription && (
               <div className="translation-section">
                 <div className="translation-header">
-                  <h3><Languages size={18} /> Traduction</h3>
+                  <h3><Languages size={18} /> Traduction en Francais</h3>
                   <div className="translation-controls">
                     <select
                       value={translationLang}
-                      onChange={(e) => setTranslationLang(e.target.value)}
+                      onChange={(e) => { setTranslationLang(e.target.value); setTranslatedText(""); }}
                       className="lang-select"
                     >
                       <option value="fr">Francais</option>
@@ -888,31 +833,29 @@ export default function App() {
                       <option value="es">Espanol</option>
                       <option value="pt">Portugais</option>
                     </select>
-                    <button className="btn-translate" onClick={translateText} disabled={translating}>
-                      {translating ? <Loader2 size={16} className="spinner" /> : <Languages size={16} />}
-                      {translating ? "Traduction..." : "Traduire"}
+                    <button className="btn-icon" onClick={async () => {
+                      await navigator.clipboard.writeText(translatedText);
+                    }} title="Copier la traduction" disabled={!translatedText}>
+                      <Copy size={16} />
                     </button>
                   </div>
                 </div>
-                {showTranslation && (
-                  <div className="translation-result">
-                    {translating ? (
-                      <div className="translation-loading">
-                        <Loader2 className="spinner" size={20} />
-                        <span>Traduction en cours...</span>
-                      </div>
-                    ) : (
-                      <div className="translation-text">
-                        <p>{translatedText}</p>
-                        <button className="btn-icon" onClick={async () => {
-                          await navigator.clipboard.writeText(translatedText);
-                        }} title="Copier la traduction">
-                          <Copy size={16} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
+                <div className="translation-result">
+                  {translating ? (
+                    <div className="translation-loading">
+                      <Loader2 className="spinner" size={20} />
+                      <span>Traduction en cours...</span>
+                    </div>
+                  ) : translatedText ? (
+                    <div className="translation-text">
+                      <p>{translatedText}</p>
+                    </div>
+                  ) : (
+                    <div className="translation-loading">
+                      <span>En attente de traduction...</span>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
