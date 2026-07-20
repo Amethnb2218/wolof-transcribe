@@ -273,41 +273,163 @@ export default function App() {
     setAudioUrl(URL.createObjectURL(selectedFile));
   };
 
-  // ===== TRANSCRIPTION =====
+  // ===== TRANSCRIPTION WITH CHUNKING (up to 5h) =====
+  const CHUNK_DURATION = 300; // 5 minutes per chunk
+
+  const splitAudioIntoChunks = async (audioFile) => {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const arrayBuffer = await audioFile.arrayBuffer();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const totalDuration = audioBuffer.duration;
+    const sampleRate = audioBuffer.sampleRate;
+    const numChannels = audioBuffer.numberOfChannels;
+    const chunks = [];
+
+    for (let start = 0; start < totalDuration; start += CHUNK_DURATION) {
+      const end = Math.min(start + CHUNK_DURATION, totalDuration);
+      const startSample = Math.floor(start * sampleRate);
+      const endSample = Math.floor(end * sampleRate);
+      const length = endSample - startSample;
+
+      const offlineCtx = new OfflineAudioContext(numChannels, length, sampleRate);
+      const source = offlineCtx.createBufferSource();
+      const chunkBuffer = offlineCtx.createBuffer(numChannels, length, sampleRate);
+
+      for (let ch = 0; ch < numChannels; ch++) {
+        const channelData = audioBuffer.getChannelData(ch);
+        chunkBuffer.getChannelData(ch).set(channelData.slice(startSample, endSample));
+      }
+
+      source.buffer = chunkBuffer;
+      source.connect(offlineCtx.destination);
+      source.start();
+
+      const rendered = await offlineCtx.startRendering();
+      const wavBlob = audioBufferToWav(rendered);
+      chunks.push({ blob: wavBlob, startTime: start, endTime: end });
+    }
+
+    audioContext.close();
+    return { chunks, totalDuration };
+  };
+
+  const audioBufferToWav = (buffer) => {
+    const numChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const format = 1; // PCM
+    const bitDepth = 16;
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const dataLength = buffer.length * blockAlign;
+    const headerLength = 44;
+    const totalLength = headerLength + dataLength;
+    const arrayBuffer = new ArrayBuffer(totalLength);
+    const view = new DataView(arrayBuffer);
+
+    const writeString = (offset, str) => {
+      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+
+    writeString(0, "RIFF");
+    view.setUint32(4, totalLength - 8, true);
+    writeString(8, "WAVE");
+    writeString(12, "fmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, format, true);
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeString(36, "data");
+    view.setUint32(40, dataLength, true);
+
+    let offset = 44;
+    for (let i = 0; i < buffer.length; i++) {
+      for (let ch = 0; ch < numChannels; ch++) {
+        const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+
+    return new Blob([arrayBuffer], { type: "audio/wav" });
+  };
+
   const startTranscription = useCallback(async () => {
     if (!file) return;
 
     setStatus("processing");
-    setStatusMessage("Envoi de l'audio au serveur...");
+    setStatusMessage("Preparation de l'audio...");
     setTranscription("");
     setSegments([]);
+    setProgress({ chunk: 0, total: 0 });
 
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      const base64 = btoa(
-        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-      );
+      const fileSize = file.size;
+      const isSmallFile = fileSize < 20 * 1024 * 1024; // < 20MB
 
-      setStatusMessage("Transcription en cours...");
+      if (isSmallFile) {
+        setStatusMessage("Transcription en cours...");
+        const arrayBuffer = await file.arrayBuffer();
+        const response = await fetch(API_URL, {
+          method: "POST",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: arrayBuffer,
+        });
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
+          throw new Error(err.error || `HTTP ${response.status}`);
+        }
+        const result = await response.json();
+        setTranscription(result.text || "");
+        setSegments(result.segments || []);
+        setDuration(result.duration || 0);
+      } else {
+        setStatusMessage("Decoupage de l'audio en segments...");
+        const { chunks, totalDuration } = await splitAudioIntoChunks(file);
+        setProgress({ chunk: 0, total: chunks.length });
+        setDuration(totalDuration);
 
-      const response = await fetch(API_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/octet-stream" },
-        body: arrayBuffer,
-      });
+        let allSegments = [];
+        let allText = "";
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
-        throw new Error(err.error || `HTTP ${response.status}`);
+        for (let i = 0; i < chunks.length; i++) {
+          setProgress({ chunk: i + 1, total: chunks.length });
+          setStatusMessage(`Transcription segment ${i + 1}/${chunks.length}...`);
+
+          const chunkArrayBuffer = await chunks[i].blob.arrayBuffer();
+          const response = await fetch(API_URL, {
+            method: "POST",
+            headers: { "Content-Type": "audio/wav" },
+            body: chunkArrayBuffer,
+          });
+
+          if (!response.ok) {
+            const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
+            throw new Error(err.error || `Erreur segment ${i + 1}: HTTP ${response.status}`);
+          }
+
+          const result = await response.json();
+          const offsetTime = chunks[i].startTime;
+
+          if (result.segments) {
+            const offsetSegments = result.segments.map((seg) => ({
+              ...seg,
+              start: seg.start + offsetTime,
+              end: seg.end + offsetTime,
+            }));
+            allSegments = [...allSegments, ...offsetSegments];
+          }
+          allText += (result.text || "") + " ";
+
+          setTranscription(allText.trim());
+          setSegments([...allSegments]);
+        }
       }
 
-      const result = await response.json();
-
-      setTranscription(result.text || "");
-      setSegments(result.segments || []);
-      setDuration(result.duration || 0);
       setStatus("done");
-      setStatusMessage("Transcription terminée !");
+      setStatusMessage("Transcription terminee !");
     } catch (err) {
       setStatus("error");
       setStatusMessage(`Erreur: ${err.message}`);
