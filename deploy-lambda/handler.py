@@ -1,5 +1,10 @@
 """AWS Lambda handler — Wolof ASR avec faster-whisper sur CPU."""
 import os
+
+os.environ["HF_HOME"] = "/tmp/hf_home"
+os.environ["HF_HUB_CACHE"] = "/tmp/hf_home"
+os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_home"
+
 import json
 import base64
 import tempfile
@@ -86,7 +91,6 @@ def lambda_handler(event, context):
             "statusCode": 200,
             "headers": {
                 "Content-Type": "application/json",
-                "Access-Control-Allow-Origin": "*",
             },
             "body": json.dumps({
                 "text": full_text.strip(),

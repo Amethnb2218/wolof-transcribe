@@ -1,4 +1,4 @@
-faster-whisper==1.1.0
+faster-whisper==1.0.3
 huggingface_hub
+requests
 numpy<2
-soundfile

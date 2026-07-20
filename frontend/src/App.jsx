@@ -25,7 +25,7 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://o2yjxdyvpy4ilif7grgtzbp4vi0fxbjm.lambda-url.us-east-1.on.aws/";
+const API_URL = import.meta.env.VITE_API_URL || "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600);
