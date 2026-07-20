@@ -21,11 +21,18 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
+  Languages,
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const API_URL = import.meta.env.VITE_API_URL || "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
+const LAMBDA_URL = "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
+const LOCAL_URL = "http://localhost:8000/";
+let API_URL = import.meta.env.VITE_API_URL || LAMBDA_URL;
+
+fetch(LOCAL_URL + "api/health", { signal: AbortSignal.timeout(2000) })
+  .then(r => r.ok && (API_URL = LOCAL_URL))
+  .catch(() => {});
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600);
@@ -85,6 +92,10 @@ export default function App() {
   const [playbackTime, setPlaybackTime] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [activeSegmentIndex, setActiveSegmentIndex] = useState(-1);
+  const [showTranslation, setShowTranslation] = useState(false);
+  const [translatedText, setTranslatedText] = useState("");
+  const [translationLang, setTranslationLang] = useState("fr");
+  const [translating, setTranslating] = useState(false);
 
   const fileInputRef = useRef(null);
   const wsRef = useRef(null);
@@ -328,6 +339,27 @@ export default function App() {
   const cancelEdit = () => {
     setEditingIndex(null);
     setEditText("");
+  };
+
+  // ===== TRANSLATION =====
+  const translateText = async () => {
+    if (!transcription) return;
+    setTranslating(true);
+    setShowTranslation(true);
+    setTranslatedText("");
+    try {
+      const res = await fetch(API_URL + "api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: transcription, target_lang: translationLang }),
+      });
+      if (!res.ok) throw new Error("Erreur traduction");
+      const data = await res.json();
+      setTranslatedText(data.translated_text || data.text || "");
+    } catch {
+      setTranslatedText("[Erreur de traduction — vérifiez le serveur local]");
+    }
+    setTranslating(false);
   };
 
   // ===== COPY & EXPORT =====
@@ -714,6 +746,51 @@ export default function App() {
                   <span className="stat-divider">|</span>
                   <span>{segments.length} segments</span>
                 </div>
+              </div>
+            )}
+
+            {/* Translation Section */}
+            {status === "done" && transcription && (
+              <div className="translation-section">
+                <div className="translation-header">
+                  <h3><Languages size={18} /> Traduction</h3>
+                  <div className="translation-controls">
+                    <select
+                      value={translationLang}
+                      onChange={(e) => setTranslationLang(e.target.value)}
+                      className="lang-select"
+                    >
+                      <option value="fr">Francais</option>
+                      <option value="en">English</option>
+                      <option value="ar">Arabe</option>
+                      <option value="es">Espanol</option>
+                      <option value="pt">Portugais</option>
+                    </select>
+                    <button className="btn-translate" onClick={translateText} disabled={translating}>
+                      {translating ? <Loader2 size={16} className="spinner" /> : <Languages size={16} />}
+                      {translating ? "Traduction..." : "Traduire"}
+                    </button>
+                  </div>
+                </div>
+                {showTranslation && (
+                  <div className="translation-result">
+                    {translating ? (
+                      <div className="translation-loading">
+                        <Loader2 className="spinner" size={20} />
+                        <span>Traduction en cours...</span>
+                      </div>
+                    ) : (
+                      <div className="translation-text">
+                        <p>{translatedText}</p>
+                        <button className="btn-icon" onClick={async () => {
+                          await navigator.clipboard.writeText(translatedText);
+                        }} title="Copier la traduction">
+                          <Copy size={16} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>

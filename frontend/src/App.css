@@ -1312,3 +1312,119 @@ kbd {
     flex-wrap: wrap;
   }
 }
+
+/* ===== TRANSLATION SECTION ===== */
+.translation-section {
+  margin-top: 16px;
+  padding: 20px 24px;
+  background: var(--bg-card-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.translation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.translation-header h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text-heading);
+  margin: 0;
+}
+
+.translation-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.lang-select {
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.lang-select:focus {
+  border-color: var(--accent);
+}
+
+.btn-translate {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gradient-accent);
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+}
+
+.btn-translate:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.btn-translate:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.translation-result {
+  margin-top: 12px;
+  padding: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  min-height: 60px;
+}
+
+.translation-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.translation-text {
+  position: relative;
+}
+
+.translation-text p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--text);
+  white-space: pre-wrap;
+}
+
+.translation-text .btn-icon {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.translation-result:hover .translation-text .btn-icon {
+  opacity: 1;
+}
