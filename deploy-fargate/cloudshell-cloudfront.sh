@@ -2,18 +2,20 @@
 set -e
 REGION=us-east-1
 FARGATE_IP="98.87.159.255"
+ORIGIN_DOMAIN="${FARGATE_IP}.nip.io"
 
 echo "=========================================="
 echo "  CLOUDFRONT HTTPS → FARGATE"
+echo "  Origin: $ORIGIN_DOMAIN"
 echo "  Timeout: 120s | HTTPS gratuit"
 echo "=========================================="
 
 echo ""
 echo "[1/1] Creation distribution CloudFront..."
 
-cat > /tmp/cf-config.json << 'EOF'
+cat > /tmp/cf-config.json << EOF
 {
-  "CallerReference": "wolof-asr-TIMESTAMP",
+  "CallerReference": "wolof-asr-$(date +%s)",
   "Comment": "Wolof ASR HTTPS proxy",
   "Enabled": true,
   "DefaultCacheBehavior": {
@@ -32,7 +34,7 @@ cat > /tmp/cf-config.json << 'EOF'
     "Quantity": 1,
     "Items": [{
       "Id": "fargate-wolof",
-      "DomainName": "FARGATE_IP_PLACEHOLDER",
+      "DomainName": "$ORIGIN_DOMAIN",
       "CustomOriginConfig": {
         "HTTPPort": 8080,
         "HTTPSPort": 443,
@@ -46,10 +48,7 @@ cat > /tmp/cf-config.json << 'EOF'
 }
 EOF
 
-sed -i "s/TIMESTAMP/$(date +%s)/" /tmp/cf-config.json
-sed -i "s/FARGATE_IP_PLACEHOLDER/$FARGATE_IP/" /tmp/cf-config.json
-
-RESULT=$(aws cloudfront create-distribution --distribution-config file:///tmp/cf-config.json --region $REGION --output json)
+RESULT=$(aws cloudfront create-distribution --distribution-config file:///tmp/cf-config.json --output json)
 DOMAIN=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['Distribution']['DomainName'])")
 DIST_ID=$(echo "$RESULT" | python3 -c "import sys,json; print(json.load(sys.stdin)['Distribution']['Id'])")
 
