@@ -29,6 +29,9 @@ def lambda_handler(event, context):
         "Access-Control-Allow-Headers": "Content-Type",
     }
 
+    if event.get("warmup"):
+        return {"statusCode": 200, "headers": headers, "body": json.dumps({"status": "warm"})}
+
     if event.get("requestContext", {}).get("http", {}).get("method") == "OPTIONS":
         return {"statusCode": 200, "headers": headers, "body": ""}
 
