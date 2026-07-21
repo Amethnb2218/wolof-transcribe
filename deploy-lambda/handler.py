@@ -1,26 +1,17 @@
 """AWS Lambda handler — Wolof ASR avec faster-whisper sur CPU."""
 import os
-
-os.environ["HF_HOME"] = "/tmp/hf_home"
-os.environ["HF_HUB_CACHE"] = "/tmp/hf_home"
-os.environ["TRANSFORMERS_CACHE"] = "/tmp/hf_home"
-
 import json
 import base64
 import tempfile
 from faster_whisper import WhisperModel
-from huggingface_hub import snapshot_download
 
-MODEL_ID = "momosl/whisper-wolof-v1-ct2"
-MODEL_DIR = "/tmp/model"
+MODEL_DIR = "/opt/model"
 model = None
 
 
 def get_model():
     global model
     if model is None:
-        if not os.path.exists(os.path.join(MODEL_DIR, "config.json")):
-            snapshot_download(MODEL_ID, local_dir=MODEL_DIR)
         model = WhisperModel(
             MODEL_DIR,
             device="cpu",
@@ -31,7 +22,16 @@ def get_model():
 
 
 def lambda_handler(event, context):
-    # Function URL encode le body binaire en base64 automatiquement
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type",
+    }
+
+    if event.get("requestContext", {}).get("http", {}).get("method") == "OPTIONS":
+        return {"statusCode": 200, "headers": headers, "body": ""}
+
     if event.get("isBase64Encoded"):
         audio_bytes = base64.b64decode(event["body"])
     elif event.get("body"):
@@ -45,17 +45,20 @@ def lambda_handler(event, context):
             except Exception:
                 return {
                     "statusCode": 400,
+                    "headers": headers,
                     "body": json.dumps({"error": "Invalid audio data"}),
                 }
     else:
         return {
             "statusCode": 400,
+            "headers": headers,
             "body": json.dumps({"error": "No audio data"}),
         }
 
     if not audio_bytes:
         return {
             "statusCode": 400,
+            "headers": headers,
             "body": json.dumps({"error": "Empty audio"}),
         }
 
@@ -89,15 +92,19 @@ def lambda_handler(event, context):
 
         return {
             "statusCode": 200,
-            "headers": {
-                "Content-Type": "application/json",
-            },
+            "headers": headers,
             "body": json.dumps({
                 "text": full_text.strip(),
                 "segments": segments,
                 "language": "wo",
                 "duration": round(info.duration, 1),
             }),
+        }
+    except Exception as e:
+        return {
+            "statusCode": 500,
+            "headers": headers,
+            "body": json.dumps({"error": str(e)}),
         }
     finally:
         os.unlink(tmp_path)
