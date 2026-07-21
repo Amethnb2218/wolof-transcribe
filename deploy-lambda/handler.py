@@ -3,7 +3,6 @@ import os
 import json
 import base64
 import tempfile
-from faster_whisper import WhisperModel
 
 MODEL_DIR = "/opt/model"
 model = None
@@ -12,6 +11,7 @@ model = None
 def get_model():
     global model
     if model is None:
+        from faster_whisper import WhisperModel
         model = WhisperModel(
             MODEL_DIR,
             device="cpu",
