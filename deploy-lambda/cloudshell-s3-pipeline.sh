@@ -90,7 +90,7 @@ sleep 5
 API_URL=$(aws lambda get-function-url-config --function-name "$API_NAME" --region $REGION --query 'FunctionUrl' --output text 2>/dev/null || echo "")
 if [ -z "$API_URL" ] || [ "$API_URL" = "None" ]; then
   aws lambda add-permission --function-name "$API_NAME" --statement-id public-url --action lambda:InvokeFunctionUrl --principal "*" --function-url-auth-type NONE --region $REGION 2>/dev/null || true
-  API_URL=$(aws lambda create-function-url-config --function-name "$API_NAME" --auth-type NONE --cors '{"AllowOrigins":["*"],"AllowMethods":["GET","POST","OPTIONS"],"AllowHeaders":["Content-Type"]}' --region $REGION --query 'FunctionUrl' --output text)
+  API_URL=$(aws lambda create-function-url-config --function-name "$API_NAME" --auth-type NONE --cors '{"AllowOrigins":["*"],"AllowMethods":["GET","POST"],"AllowHeaders":["Content-Type"]}' --region $REGION --query 'FunctionUrl' --output text)
 fi
 echo "  API URL: $API_URL"
 
