@@ -1,12 +1,11 @@
 #!/bin/bash
 set -e
 REGION=us-east-1
-FARGATE_IP="98.87.159.255"
-ORIGIN_DOMAIN="${FARGATE_IP}.nip.io"
+ORIGIN_DOMAIN="transcribe.4ura.tech"
 
 echo "=========================================="
 echo "  CLOUDFRONT HTTPS → FARGATE"
-echo "  Origin: $ORIGIN_DOMAIN"
+echo "  Origin: $ORIGIN_DOMAIN:8080"
 echo "  Timeout: 120s | HTTPS gratuit"
 echo "=========================================="
 
@@ -63,6 +62,5 @@ echo ""
 echo "  Mets dans Render:"
 echo "  VITE_API_URL = https://$DOMAIN"
 echo ""
-echo "  Note: deploiement CloudFront ~5 min"
-echo "  pour etre actif worldwide"
+echo "  Note: deploiement ~5 min pour etre actif"
 echo "=========================================="
