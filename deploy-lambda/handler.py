@@ -11,12 +11,15 @@ model = None
 def get_model():
     global model
     if model is None:
+        import ctranslate2
+        ctranslate2.set_random_seed(42)
         from faster_whisper import WhisperModel
         model = WhisperModel(
             MODEL_DIR,
             device="cpu",
             compute_type="int8",
-            cpu_threads=4,
+            cpu_threads=2,
+            num_workers=1,
         )
     return model
 
@@ -75,7 +78,7 @@ def lambda_handler(event, context):
             tmp_path,
             language="fr",
             task="transcribe",
-            beam_size=3,
+            beam_size=1,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
