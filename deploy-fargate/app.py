@@ -11,19 +11,14 @@ app = Flask(__name__)
 CORS(app)
 
 MODEL_DIR = "/opt/model"
-model = None
-
-
-def get_model():
-    global model
-    if model is None:
-        model = WhisperModel(
-            MODEL_DIR,
-            device="cpu",
-            compute_type="int8",
-            cpu_threads=4,
-        )
-    return model
+print("Loading model...", flush=True)
+model = WhisperModel(
+    MODEL_DIR,
+    device="cpu",
+    compute_type="int8",
+    cpu_threads=4,
+)
+print("Model loaded!", flush=True)
 
 
 @app.route("/health", methods=["GET"])
@@ -54,8 +49,7 @@ def transcribe():
             f.write(audio_bytes)
             tmp_path = f.name
 
-        m = get_model()
-        segments_gen, info = m.transcribe(
+        segments_gen, info = model.transcribe(
             tmp_path,
             language="fr",
             task="transcribe",
@@ -91,7 +85,4 @@ def transcribe():
 
 
 if __name__ == "__main__":
-    print("Loading model...")
-    get_model()
-    print("Model loaded! Starting server on port 8080...")
     app.run(host="0.0.0.0", port=8080)
