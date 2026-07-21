@@ -16,7 +16,7 @@ def get_model():
             MODEL_DIR,
             device="cpu",
             compute_type="int8",
-            cpu_threads=4,
+            cpu_threads=3,
         )
     return model
 
@@ -75,7 +75,7 @@ def lambda_handler(event, context):
             tmp_path,
             language="fr",
             task="transcribe",
-            beam_size=5,
+            beam_size=3,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=500,
