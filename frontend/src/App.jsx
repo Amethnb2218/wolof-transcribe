@@ -28,8 +28,16 @@ import "./App.css";
 
 const LAMBDA_URL = "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
 const LOCAL_URL = "http://localhost:8000/";
-const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY || "";
+const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "";
 let API_URL = import.meta.env.VITE_API_URL || LAMBDA_URL;
+
+const NLLB_LANG_CODES = {
+  fr: "fra_Latn",
+  en: "eng_Latn",
+  ar: "arb_Arab",
+  es: "spa_Latn",
+  pt: "por_Latn",
+};
 
 fetch(LOCAL_URL + "api/health", { signal: AbortSignal.timeout(2000) })
   .then(r => r.ok && (API_URL = LOCAL_URL))
@@ -395,34 +403,35 @@ export default function App() {
     setEditText("");
   };
 
-  // ===== TRANSLATION (via Groq LLM) =====
+  // ===== TRANSLATION (via NLLB - Meta) =====
   const translateText = async () => {
     if (!transcription) return;
     setTranslating(true);
     setShowTranslation(true);
     setTranslatedText("");
-    const langNames = { fr: "francais", en: "anglais", ar: "arabe", es: "espagnol", pt: "portugais" };
-    const targetName = langNames[translationLang] || "francais";
+    const tgtLang = NLLB_LANG_CODES[translationLang] || "fra_Latn";
     try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${GROQ_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "llama-3.3-70b-versatile",
-          messages: [
-            { role: "system", content: `Tu es un traducteur expert wolof. Traduis le texte wolof suivant en ${targetName}. Retourne UNIQUEMENT la traduction, rien d'autre.` },
-            { role: "user", content: transcription },
-          ],
-          temperature: 0.3,
-          max_tokens: 4096,
-        }),
-      });
+      const res = await fetch(
+        "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${HF_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            inputs: transcription,
+            parameters: {
+              src_lang: "wol_Latn",
+              tgt_lang: tgtLang,
+            },
+          }),
+        }
+      );
       if (!res.ok) throw new Error("Erreur traduction");
       const data = await res.json();
-      setTranslatedText(data.choices[0].message.content.trim());
+      const text = Array.isArray(data) ? data[0]?.translation_text : data.translation_text;
+      setTranslatedText(text || "[Pas de traduction]");
     } catch {
       setTranslatedText("[Erreur de traduction]");
     }
@@ -872,7 +881,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <p>Wolof Transcriber — Whisper Large-V3 fine-tuné sur 281h de wolof | Correction LLM Groq</p>
+        <p>Wolof Transcriber — Whisper Large-V3 fine-tuné sur 281h de wolof | Traduction NLLB</p>
       </footer>
     </div>
   );
