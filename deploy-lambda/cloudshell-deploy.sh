@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # SCRIPT CLOUDSHELL — Build + Deploy wolof-asr Lambda Docker
-# Copier-coller TOUT dans CloudShell en une seule fois
+# Le modèle est téléchargé DANS le Docker build (pas sur le filesystem)
 # ============================================================
 
 set -e
@@ -9,10 +9,11 @@ echo "=========================================="
 echo "  WOLOF-ASR DOCKER LAMBDA DEPLOYMENT"
 echo "=========================================="
 
-# 1. Créer le dossier de travail
-mkdir -p ~/wolof-asr && cd ~/wolof-asr
+cd /tmp
+rm -rf wolof-asr 2>/dev/null
+mkdir -p wolof-asr && cd wolof-asr
 
-# 2. Créer requirements.txt
+# 1. requirements.txt
 cat > requirements.txt << 'EOF'
 faster-whisper==1.0.3
 huggingface_hub
@@ -20,7 +21,7 @@ requests
 numpy<2
 EOF
 
-# 3. Créer le handler
+# 2. handler.py
 cat > handler.py << 'HANDLER'
 """AWS Lambda handler — Wolof ASR avec faster-whisper sur CPU."""
 import os
@@ -130,7 +131,7 @@ def lambda_handler(event, context):
             os.unlink(tmp_path)
 HANDLER
 
-# 4. Créer le Dockerfile
+# 3. Dockerfile — télécharge le modèle PENDANT le build Docker
 cat > Dockerfile << 'DOCKERFILE'
 FROM public.ecr.aws/lambda/python:3.11
 
@@ -139,33 +140,31 @@ RUN pip install --upgrade pip
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY wolof-model/ /opt/model/
+# Télécharger le modèle pendant le build (dans l'image Docker, pas sur le filesystem)
+RUN mkdir -p /opt/model && \
+    curl -sL -o /opt/model/config.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/config.json && \
+    curl -sL -o /opt/model/vocabulary.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/vocabulary.json && \
+    curl -sL -o /opt/model/tokenizer_config.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/tokenizer_config.json && \
+    curl -sL -o /opt/model/vocab.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/vocab.json && \
+    curl -sL -o /opt/model/merges.txt https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/merges.txt && \
+    curl -sL -o /opt/model/added_tokens.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/added_tokens.json && \
+    curl -sL -o /opt/model/special_tokens_map.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/special_tokens_map.json && \
+    curl -sL -o /opt/model/normalizer.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/normalizer.json && \
+    curl -sL -o /opt/model/preprocessor_config.json https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/preprocessor_config.json && \
+    curl -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/model.bin && \
+    ls -la /opt/model/
 
 COPY handler.py ${LAMBDA_TASK_ROOT}/
 
 CMD ["handler.lambda_handler"]
 DOCKERFILE
 
-# 5. Télécharger le modèle
+# 4. Build Docker
 echo ""
-echo "Telechargement du modele wolof CT2 (~1.5GB)..."
-mkdir -p wolof-model
-cd wolof-model
-for f in config.json vocabulary.json tokenizer_config.json vocab.json merges.txt added_tokens.json special_tokens_map.json normalizer.json preprocessor_config.json; do
-  curl -sL -o "$f" "https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/$f"
-  echo "  OK: $f"
-done
-echo "  Downloading model.bin (1.5GB)..."
-curl -L -o model.bin "https://huggingface.co/momosl/whisper-wolof-v1-ct2/resolve/main/model.bin"
-echo "  OK: model.bin ($(du -h model.bin | cut -f1))"
-cd ..
-
-# 6. Build Docker
-echo ""
-echo "Build Docker image..."
+echo "Build Docker image (telecharge le modele dans l'image)..."
 docker build --platform linux/amd64 -t wolof-asr .
 
-# 7. Login ECR + Push
+# 5. Login ECR + Push
 echo ""
 echo "Push vers ECR..."
 ACCOUNT=335596040822
@@ -176,7 +175,7 @@ aws ecr get-login-password --region $REGION | docker login --username AWS --pass
 docker tag wolof-asr:latest $REPO:latest
 docker push $REPO:latest
 
-# 8. Mettre à jour Lambda
+# 6. Mettre à jour Lambda
 echo ""
 echo "Mise a jour Lambda..."
 aws lambda update-function-code \
