@@ -127,6 +127,9 @@ TASK_DEF=$(cat << TASKEOF
       "name": "$CONTAINER_NAME",
       "image": "$REPO_URI:latest",
       "portMappings": [{"containerPort": $PORT, "protocol": "tcp"}],
+      "environment": [
+        {"name": "HF_API_TOKEN", "value": "${HF_API_TOKEN:-}"}
+      ],
       "logConfiguration": {
         "logDriver": "awslogs",
         "options": {
