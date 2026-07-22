@@ -575,6 +575,75 @@ async def transcribe_upload(file: UploadFile = File(...)):
                 pass
 
 
+@app.post("/api/translate")
+async def translate_text(request: dict = None):
+    from fastapi import Request
+    import json
+
+    if request is None:
+        raise HTTPException(status_code=400, detail="Body requis")
+
+    text = request.get("text", "")
+    src_lang = request.get("src_lang", "wol_Latn")
+    tgt_lang = request.get("tgt_lang", "fra_Latn")
+
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="Texte vide")
+
+    token = HF_API_TOKEN or os.environ.get("HF_API_KEY", "") or os.environ.get("HUGGINGFACE_API_KEY", "")
+
+    try:
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M",
+                headers=headers,
+                json={
+                    "inputs": text,
+                    "parameters": {"src_lang": src_lang, "tgt_lang": tgt_lang},
+                    "options": {"wait_for_model": True},
+                },
+            )
+
+        if response.status_code == 503:
+            data = response.json()
+            wait_time = min(data.get("estimated_time", 20), 30)
+            await asyncio.sleep(wait_time)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(
+                    "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M",
+                    headers=headers,
+                    json={
+                        "inputs": text,
+                        "parameters": {"src_lang": src_lang, "tgt_lang": tgt_lang},
+                        "options": {"wait_for_model": True},
+                    },
+                )
+
+        if response.status_code != 200:
+            raise HTTPException(status_code=502, detail=f"HuggingFace error: {response.status_code}")
+
+        data = response.json()
+        if isinstance(data, list) and len(data) > 0:
+            translation = data[0].get("translation_text", "")
+        elif isinstance(data, dict):
+            translation = data.get("translation_text", "")
+        else:
+            translation = ""
+
+        return {"translation_text": translation}
+
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Timeout traduction")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur traduction: {str(e)}")
+
+
 @app.get("/api/health")
 async def health():
     return {

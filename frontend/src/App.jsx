@@ -28,7 +28,6 @@ import "./App.css";
 
 const LAMBDA_URL = "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
 const LOCAL_URL = "http://localhost:8000/";
-const HF_TOKEN = import.meta.env.VITE_HF_TOKEN || "";
 let API_URL = import.meta.env.VITE_API_URL || LAMBDA_URL;
 
 const NLLB_LANG_CODES = {
@@ -403,7 +402,7 @@ export default function App() {
     setEditText("");
   };
 
-  // ===== TRANSLATION (via NLLB - Meta) =====
+  // ===== TRANSLATION (via backend → NLLB) =====
   const translateText = async () => {
     if (!transcription) return;
     setTranslating(true);
@@ -411,27 +410,18 @@ export default function App() {
     setTranslatedText("");
     const tgtLang = NLLB_LANG_CODES[translationLang] || "fra_Latn";
     try {
-      const res = await fetch(
-        "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M",
-        {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${HF_TOKEN}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            inputs: transcription,
-            parameters: {
-              src_lang: "wol_Latn",
-              tgt_lang: tgtLang,
-            },
-          }),
-        }
-      );
+      const res = await fetch(API_URL + "api/translate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          text: transcription,
+          src_lang: "wol_Latn",
+          tgt_lang: tgtLang,
+        }),
+      });
       if (!res.ok) throw new Error("Erreur traduction");
       const data = await res.json();
-      const text = Array.isArray(data) ? data[0]?.translation_text : data.translation_text;
-      setTranslatedText(text || "[Pas de traduction]");
+      setTranslatedText(data.translation_text || "[Pas de traduction]");
     } catch {
       setTranslatedText("[Erreur de traduction]");
     }
