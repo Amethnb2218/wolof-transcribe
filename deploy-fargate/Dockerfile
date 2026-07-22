@@ -16,7 +16,8 @@ RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/special_tokens_map.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/special_tokens_map.json && \
     curl -sL -o /opt/model/normalizer.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/normalizer.json && \
     curl -sL -o /opt/model/preprocessor_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/preprocessor_config.json && \
-    curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin
+    curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin && \
+    python3 -c "import json; f='/opt/model/config.json'; c=json.load(open(f)); c['begin_suppress_tokens']=c.get('begin_suppress_tokens') or []; c.pop('max_length',None); json.dump(c,open(f,'w'),indent=2)"
 
 COPY app.py .
 
