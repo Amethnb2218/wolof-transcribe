@@ -3,6 +3,8 @@ import os
 import json
 import base64
 import tempfile
+import time
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from faster_whisper import WhisperModel
@@ -82,6 +84,60 @@ def transcribe():
     finally:
         if tmp_path:
             os.unlink(tmp_path)
+
+
+HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")
+NLLB_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
+
+
+@app.route("/api/translate", methods=["POST", "OPTIONS"])
+def translate():
+    if request.method == "OPTIONS":
+        return "", 200
+
+    data = request.get_json(force=True)
+    text = data.get("text", "").strip()
+    src_lang = data.get("src_lang", "wol_Latn")
+    tgt_lang = data.get("tgt_lang", "fra_Latn")
+
+    if not text:
+        return jsonify({"error": "Texte vide"}), 400
+
+    headers = {"Content-Type": "application/json"}
+    if HF_API_TOKEN:
+        headers["Authorization"] = f"Bearer {HF_API_TOKEN}"
+
+    payload = {
+        "inputs": text,
+        "parameters": {"src_lang": src_lang, "tgt_lang": tgt_lang},
+        "options": {"wait_for_model": True},
+    }
+
+    try:
+        resp = requests.post(NLLB_URL, headers=headers, json=payload, timeout=60)
+
+        if resp.status_code == 503:
+            wait_time = min(resp.json().get("estimated_time", 20), 30)
+            time.sleep(wait_time)
+            resp = requests.post(NLLB_URL, headers=headers, json=payload, timeout=60)
+
+        if resp.status_code != 200:
+            return jsonify({"error": f"HuggingFace error: {resp.status_code}"}), 502
+
+        result = resp.json()
+        if isinstance(result, list) and len(result) > 0:
+            translation = result[0].get("translation_text", "")
+        elif isinstance(result, dict):
+            translation = result.get("translation_text", "")
+        else:
+            translation = ""
+
+        return jsonify({"translation_text": translation})
+
+    except requests.Timeout:
+        return jsonify({"error": "Timeout traduction"}), 504
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 if __name__ == "__main__":

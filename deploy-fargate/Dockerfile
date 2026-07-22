@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn
+RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn requests
 
 RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/config.json && \
