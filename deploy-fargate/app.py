@@ -13,6 +13,23 @@ app = Flask(__name__)
 CORS(app)
 
 MODEL_DIR = "/opt/model"
+
+config_path = os.path.join(MODEL_DIR, "config.json")
+if os.path.exists(config_path):
+    with open(config_path) as f:
+        cfg = json.load(f)
+    patched = False
+    if cfg.get("begin_suppress_tokens") is None:
+        cfg["begin_suppress_tokens"] = []
+        patched = True
+    if cfg.get("max_length") is None:
+        cfg.pop("max_length", None)
+        patched = True
+    if patched:
+        with open(config_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print("Patched config.json (null values)", flush=True)
+
 print("Loading model...", flush=True)
 model = WhisperModel(
     MODEL_DIR,
