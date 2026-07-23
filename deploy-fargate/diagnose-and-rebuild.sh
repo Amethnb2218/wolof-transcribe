@@ -1,39 +1,60 @@
 #!/bin/bash
-# Diagnose failed build + rebuild
+# Diagnose failed build + rebuild with inline Dockerfile (no GitHub cache issues)
 set -e
 
 REGION=us-east-1
-BUILD_ID="wolof-fargate-build:b2c8211e-262c-46e8-bf9a-eac504c7cf90"
+ACCOUNT=335596040822
+CLUSTER=wolof-asr-cluster
+SERVICE=wolof-asr-service
 
-echo "=== [1] FETCHING BUILD LOGS ==="
-LOG_GROUP=$(aws codebuild batch-get-builds --ids "$BUILD_ID" --region $REGION --query 'builds[0].logs.groupName' --output text)
-LOG_STREAM=$(aws codebuild batch-get-builds --ids "$BUILD_ID" --region $REGION --query 'builds[0].logs.streamName' --output text)
-echo "  Log group: $LOG_GROUP"
-echo "  Log stream: $LOG_STREAM"
-echo ""
-echo "--- LAST 50 LINES ---"
-aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$LOG_STREAM" --region $REGION --query 'events[-50:].message' --output text
-echo "--- END LOGS ---"
-echo ""
+echo "=== REBUILD WITH INLINE DOCKERFILE ==="
 
-echo "=== [2] REBUILDING WITH FIXED BUILDSPEC ==="
-
+# The buildspec writes both Dockerfile and app.py inline to avoid GitHub raw cache issues
 BUILDSPEC=$(cat << 'BSEOF'
 version: 0.2
-env:
-  variables:
-    DOCKER_BUILDKIT: "1"
 phases:
   pre_build:
     commands:
       - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 335596040822.dkr.ecr.us-east-1.amazonaws.com
+      - mkdir -p /tmp/build && cd /tmp/build
   build:
     commands:
-      - mkdir -p /tmp/fargate
-      - cd /tmp/fargate
-      - curl -sL -o app.py https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/app.py
-      - curl -sL -o Dockerfile https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/Dockerfile
-      - docker build --platform linux/amd64 -t wolof-asr-fargate .
+      - |
+        cd /tmp/build
+        cat > Dockerfile << 'DEOF'
+        FROM python:3.11-slim
+        RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
+        RUN pip install --no-cache-dir sentencepiece protobuf ctranslate2
+        RUN mkdir -p /opt/model && \
+            curl -sL -o /opt/model/config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/config.json && \
+            curl -sL -o /opt/model/vocabulary.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/vocabulary.json && \
+            curl -sL -o /opt/model/tokenizer_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/tokenizer_config.json && \
+            curl -sL -o /opt/model/vocab.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/vocab.json && \
+            curl -sL -o /opt/model/merges.txt https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/merges.txt && \
+            curl -sL -o /opt/model/added_tokens.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/added_tokens.json && \
+            curl -sL -o /opt/model/special_tokens_map.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/special_tokens_map.json && \
+            curl -sL -o /opt/model/normalizer.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/normalizer.json && \
+            curl -sL -o /opt/model/preprocessor_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/preprocessor_config.json && \
+            curl -sL -o /opt/model/generation_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/generation_config.json && \
+            curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin
+        RUN python3 -c "from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
+            t = AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); \
+            m = AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M'); \
+            t.save_pretrained('/opt/nllb-hf'); \
+            m.save_pretrained('/opt/nllb-hf')"
+        RUN ct2-transformers-converter --model /opt/nllb-hf --output_dir /opt/nllb \
+              --quantization int8 --force && \
+            cp /opt/nllb-hf/sentencepiece.bpe.model /opt/nllb/ && \
+            rm -rf /opt/nllb-hf
+        COPY app.py .
+        EXPOSE 8080
+        CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "300", "--workers", "1", "app:app"]
+        DEOF
+        curl -sL -o app.py "https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/app.py"
+        cat Dockerfile
+        docker build --platform linux/amd64 --no-cache -t wolof-asr-fargate .
   post_build:
     commands:
       - docker tag wolof-asr-fargate:latest 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-fargate:latest
@@ -52,7 +73,7 @@ aws codebuild update-project \
   --region $REGION > /dev/null && echo "  Project updated"
 
 NEW_BUILD_ID=$(aws codebuild start-build --project-name "wolof-fargate-build" --region $REGION --query 'build.id' --output text)
-echo "  New build: $NEW_BUILD_ID"
+echo "  Build: $NEW_BUILD_ID"
 echo "  Waiting (~15 min)..."
 
 while true; do
@@ -64,7 +85,8 @@ while true; do
     echo "  Image pushed!"
     break
   elif [ "$STATUS" != "IN_PROGRESS" ]; then
-    echo "  FAILED AGAIN - getting logs..."
+    echo "  FAILED - getting logs..."
+    LOG_GROUP="/aws/codebuild/wolof-fargate-build"
     NEW_STREAM=$(aws codebuild batch-get-builds --ids "$NEW_BUILD_ID" --region $REGION --query 'builds[0].logs.streamName' --output text)
     aws logs get-log-events --log-group-name "$LOG_GROUP" --log-stream-name "$NEW_STREAM" --region $REGION --query 'events[-40:].message' --output text
     exit 1
@@ -72,9 +94,7 @@ while true; do
 done
 
 echo ""
-echo "=== [3] DEPLOYING ==="
-CLUSTER=wolof-asr-cluster
-SERVICE=wolof-asr-service
+echo "=== DEPLOYING ==="
 
 aws ecs register-task-definition --cli-input-json '{
   "family": "wolof-asr-task",
@@ -109,14 +129,14 @@ aws ecs update-service \
 echo "  Service redeploying..."
 
 echo ""
-echo "=== [4] WAITING FOR HEALTHY (~3 min) ==="
+echo "=== WAITING FOR HEALTHY (~3 min) ==="
 sleep 90
 for i in $(seq 1 8); do
   HEALTH=$(curl -s https://transcribe.4ura.tech/health 2>/dev/null || echo "waiting...")
   echo "  [$((i*15))s] $HEALTH"
   if echo "$HEALTH" | grep -q "model_loaded"; then
     echo ""
-    echo "=== [5] TEST TRADUCTION ==="
+    echo "=== TEST TRADUCTION ==="
     curl -s -X POST https://transcribe.4ura.tech/api/translate \
       -H "Content-Type: application/json" \
       -d '{"text":"Jàmm nga am","src_lang":"wol_Latn","tgt_lang":"fra_Latn"}'
