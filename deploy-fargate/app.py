@@ -18,27 +18,23 @@ config_path = os.path.join(MODEL_DIR, "config.json")
 if os.path.exists(config_path):
     with open(config_path) as f:
         cfg = json.load(f)
-    patched = False
-    if cfg.get("begin_suppress_tokens") is None:
-        cfg["begin_suppress_tokens"] = []
-        patched = True
-    if cfg.get("max_length") is None:
-        cfg.pop("max_length", None)
-        patched = True
-    if patched:
-        with open(config_path, "w") as f:
-            json.dump(cfg, f, indent=2)
-        print("Patched config.json (null values)", flush=True)
+    cfg["begin_suppress_tokens"] = [220, 50257]
+    cfg["max_length"] = 448
+    cfg.pop("forced_decoder_ids", None)
+    with open(config_path, "w") as f:
+        json.dump(cfg, f, indent=2)
+    print("Patched config.json", flush=True)
 
 gen_config_path = os.path.join(MODEL_DIR, "generation_config.json")
 if os.path.exists(gen_config_path):
     with open(gen_config_path) as f:
         gcfg = json.load(f)
-    if "forced_decoder_ids" in gcfg:
-        gcfg.pop("forced_decoder_ids")
-        with open(gen_config_path, "w") as f:
-            json.dump(gcfg, f, indent=2)
-        print("Patched generation_config.json (removed forced_decoder_ids)", flush=True)
+    gcfg.pop("forced_decoder_ids", None)
+    if gcfg.get("begin_suppress_tokens") is None:
+        gcfg["begin_suppress_tokens"] = [220, 50257]
+    with open(gen_config_path, "w") as f:
+        json.dump(gcfg, f, indent=2)
+    print("Patched generation_config.json", flush=True)
 
 print("Loading model...", flush=True)
 model = WhisperModel(
