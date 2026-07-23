@@ -1,4 +1,4 @@
-"""Wolof ASR — Fargate HTTP server with faster-whisper."""
+"""Wolof ASR + Translation — Fargate HTTP server."""
 import os
 import json
 import base64
@@ -12,11 +12,6 @@ CORS(app)
 
 MODEL_DIR = "/opt/model"
 
-# CTranslate2 reads config.json expecting its OWN format (suppress_ids, suppress_ids_begin,
-# alignment_heads, lang_ids). The HuggingFace repo ships the wrong config.json (transformers
-# format with begin_suppress_tokens, d_model, etc.) which causes:
-#   [json.exception.type_error.302] type must be number, but is number
-# Fix: overwrite with the correct CTranslate2-format config.
 config_path = os.path.join(MODEL_DIR, "config.json")
 ct2_config = {
     "suppress_ids": [
@@ -40,14 +35,14 @@ with open(config_path, "w") as f:
     json.dump(ct2_config, f, indent=2)
 print("Wrote correct CTranslate2 config.json", flush=True)
 
-print("Loading model...", flush=True)
+print("Loading Whisper model...", flush=True)
 model = WhisperModel(
     MODEL_DIR,
     device="cpu",
     compute_type="int8",
     cpu_threads=8,
 )
-print("Model loaded!", flush=True)
+print("Whisper model loaded!", flush=True)
 
 
 @app.route("/health", methods=["GET"])
@@ -112,19 +107,23 @@ def transcribe():
             os.unlink(tmp_path)
 
 
+# --- NLLB Translation (using transformers directly, no ctranslate2) ---
 NLLB_MODEL_DIR = "/opt/nllb"
-nllb_translator = None
-nllb_sp = None
+nllb_pipeline = None
 
-if os.path.exists(os.path.join(NLLB_MODEL_DIR, "model.bin")):
-    print("Loading NLLB translation model (CT2)...", flush=True)
-    import ctranslate2
-    import sentencepiece as spm
-    nllb_translator = ctranslate2.Translator(NLLB_MODEL_DIR, device="cpu", compute_type="int8")
-    nllb_sp = spm.SentencePieceProcessor(os.path.join(NLLB_MODEL_DIR, "sentencepiece.bpe.model"))
-    print("NLLB model loaded!", flush=True)
-else:
-    print("WARNING: NLLB model not found at /opt/nllb - translation disabled", flush=True)
+try:
+    if os.path.exists(NLLB_MODEL_DIR):
+        print("Loading NLLB translation model (transformers)...", flush=True)
+        from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+        nllb_tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_DIR)
+        nllb_model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_DIR)
+        nllb_pipeline = True
+        print("NLLB model loaded!", flush=True)
+    else:
+        print("WARNING: NLLB model not found - translation disabled", flush=True)
+except Exception as e:
+    print(f"WARNING: NLLB failed to load: {e} - translation disabled", flush=True)
+    nllb_pipeline = None
 
 
 @app.route("/api/translate", methods=["POST", "OPTIONS"])
@@ -132,7 +131,7 @@ def translate():
     if request.method == "OPTIONS":
         return "", 200
 
-    if nllb_translator is None:
+    if nllb_pipeline is None:
         return jsonify({"error": "Translation model not loaded"}), 503
 
     data = request.get_json(force=True)
@@ -144,20 +143,18 @@ def translate():
         return jsonify({"error": "Texte vide"}), 400
 
     try:
-        tokens = nllb_sp.encode(text, out_type=str)
-        source_tokens = [src_lang] + tokens + ["</s>"]
-        target_prefix = [tgt_lang]
+        nllb_tokenizer.src_lang = src_lang
+        inputs = nllb_tokenizer(text, return_tensors="pt", max_length=512, truncation=True)
+        tgt_lang_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
 
-        results = nllb_translator.translate_batch(
-            [source_tokens],
-            target_prefix=[target_prefix],
-            max_decoding_length=256,
-            beam_size=4,
+        generated = nllb_model.generate(
+            **inputs,
+            forced_bos_token_id=tgt_lang_id,
+            max_new_tokens=256,
+            num_beams=4,
         )
 
-        output_tokens = results[0].hypotheses[0][1:]
-        translation = nllb_sp.decode(output_tokens)
-
+        translation = nllb_tokenizer.decode(generated[0], skip_special_tokens=True)
         return jsonify({"translation_text": translation})
 
     except Exception as e:
