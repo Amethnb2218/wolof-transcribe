@@ -4,7 +4,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn transformers torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn transformers torch --extra-index-url https://download.pytorch.org/whl/cpu
 RUN pip install --no-cache-dir sentencepiece protobuf
 
 RUN mkdir -p /opt/model && \
