@@ -19,9 +19,6 @@ RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/generation_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/generation_config.json && \
     curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin
 
-COPY patch_config.py /tmp/patch_config.py
-RUN python3 /tmp/patch_config.py
-
 COPY app.py .
 
 EXPOSE 8080

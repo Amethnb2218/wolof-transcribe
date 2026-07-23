@@ -30,6 +30,16 @@ if os.path.exists(config_path):
             json.dump(cfg, f, indent=2)
         print("Patched config.json (null values)", flush=True)
 
+gen_config_path = os.path.join(MODEL_DIR, "generation_config.json")
+if os.path.exists(gen_config_path):
+    with open(gen_config_path) as f:
+        gcfg = json.load(f)
+    if "forced_decoder_ids" in gcfg:
+        gcfg.pop("forced_decoder_ids")
+        with open(gen_config_path, "w") as f:
+            json.dump(gcfg, f, indent=2)
+        print("Patched generation_config.json (removed forced_decoder_ids)", flush=True)
+
 print("Loading model...", flush=True)
 model = WhisperModel(
     MODEL_DIR,

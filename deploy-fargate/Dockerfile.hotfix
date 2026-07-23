@@ -1,0 +1,5 @@
+FROM 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-fargate:latest
+
+COPY app.py /app/app.py
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "300", "--workers", "1", "app:app"]
