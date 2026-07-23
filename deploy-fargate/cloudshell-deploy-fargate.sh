@@ -48,6 +48,7 @@ phases:
       - mkdir -p /tmp/fargate && cd /tmp/fargate
       - curl -sL -o app.py https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/app.py
       - curl -sL -o Dockerfile https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/Dockerfile
+      - curl -sL -o patch_config.py https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/patch_config.py
       - docker build --platform linux/amd64 -t wolof-asr-fargate .
   post_build:
     commands:
