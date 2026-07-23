@@ -6,16 +6,16 @@ REGION=us-east-1
 CLUSTER=wolof-asr-cluster
 SERVICE=wolof-asr-service
 
-echo "=== FIX TASK MEMORY (2 vCPU / 8 GB) ==="
+echo "=== FIX TASK MEMORY (4 vCPU / 16 GB) ==="
 
-echo "[1] Register new task definition with 8 GB..."
+echo "[1] Register new task definition with 16 GB..."
 cat > /tmp/task-def.json << 'EOF'
 {
   "family": "wolof-asr-task",
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
-  "cpu": "2048",
-  "memory": "8192",
+  "cpu": "4096",
+  "memory": "16384",
   "executionRoleArn": "arn:aws:iam::335596040822:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
@@ -37,7 +37,7 @@ cat > /tmp/task-def.json << 'EOF'
 EOF
 
 aws ecs register-task-definition --cli-input-json file:///tmp/task-def.json --region $REGION > /dev/null
-echo "  Done (2 vCPU / 8 GB)"
+echo "  Done (4 vCPU / 16 GB)"
 
 echo ""
 echo "[2] Force new deployment..."

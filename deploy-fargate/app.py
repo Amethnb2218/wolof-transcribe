@@ -45,7 +45,7 @@ model = WhisperModel(
     MODEL_DIR,
     device="cpu",
     compute_type="int8",
-    cpu_threads=4,
+    cpu_threads=8,
 )
 print("Model loaded!", flush=True)
 
