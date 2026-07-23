@@ -1,13 +1,12 @@
 FROM 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-fargate:latest
 
-RUN pip install --no-cache-dir transformers torch --index-url https://download.pytorch.org/whl/cpu && \
-    pip install --no-cache-dir sentencepiece protobuf
+RUN pip install --no-cache-dir ctranslate2 sentencepiece
 
-RUN python3 -c "from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
-    t = AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); \
-    m = AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M'); \
-    t.save_pretrained('/opt/nllb'); \
-    m.save_pretrained('/opt/nllb')"
+RUN mkdir -p /opt/nllb && \
+    curl -sL -o /opt/nllb/model.bin https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main/model.bin && \
+    curl -sL -o /opt/nllb/shared_vocabulary.json https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main/shared_vocabulary.json && \
+    curl -sL -o /opt/nllb/config.json https://huggingface.co/JustFrederik/nllb-200-distilled-600M-ct2-int8/resolve/main/config.json && \
+    curl -sL -o /opt/nllb/sentencepiece.bpe.model https://huggingface.co/facebook/nllb-200-distilled-600M/resolve/main/sentencepiece.bpe.model
 
 COPY app.py /app/app.py
 

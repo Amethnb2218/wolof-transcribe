@@ -3,8 +3,6 @@ import os
 import json
 import base64
 import tempfile
-import time
-import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from faster_whisper import WhisperModel
@@ -115,14 +113,15 @@ def transcribe():
 
 
 NLLB_MODEL_DIR = "/opt/nllb"
-nllb_tokenizer = None
-nllb_model = None
+nllb_translator = None
+nllb_sp = None
 
-if os.path.exists(NLLB_MODEL_DIR):
-    print("Loading NLLB translation model...", flush=True)
-    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-    nllb_tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_DIR)
-    nllb_model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_DIR)
+if os.path.exists(os.path.join(NLLB_MODEL_DIR, "model.bin")):
+    print("Loading NLLB translation model (CT2)...", flush=True)
+    import ctranslate2
+    import sentencepiece as spm
+    nllb_translator = ctranslate2.Translator(NLLB_MODEL_DIR, device="cpu", compute_type="int8")
+    nllb_sp = spm.SentencePieceProcessor(os.path.join(NLLB_MODEL_DIR, "sentencepiece.bpe.model"))
     print("NLLB model loaded!", flush=True)
 else:
     print("WARNING: NLLB model not found at /opt/nllb - translation disabled", flush=True)
@@ -133,7 +132,7 @@ def translate():
     if request.method == "OPTIONS":
         return "", 200
 
-    if nllb_model is None:
+    if nllb_translator is None:
         return jsonify({"error": "Translation model not loaded"}), 503
 
     data = request.get_json(force=True)
@@ -145,16 +144,19 @@ def translate():
         return jsonify({"error": "Texte vide"}), 400
 
     try:
-        nllb_tokenizer.src_lang = src_lang
-        inputs = nllb_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
-        tgt_lang_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
+        tokens = nllb_sp.encode(text, out_type=str)
+        source_tokens = [src_lang] + tokens + ["</s>"]
+        target_prefix = [tgt_lang]
 
-        translated = nllb_model.generate(
-            **inputs,
-            forced_bos_token_id=tgt_lang_id,
-            max_new_tokens=256,
+        results = nllb_translator.translate_batch(
+            [source_tokens],
+            target_prefix=[target_prefix],
+            max_decoding_length=256,
+            beam_size=4,
         )
-        translation = nllb_tokenizer.decode(translated[0], skip_special_tokens=True)
+
+        output_tokens = results[0].hypotheses[0][1:]
+        translation = nllb_sp.decode(output_tokens)
 
         return jsonify({"translation_text": translation})
 
