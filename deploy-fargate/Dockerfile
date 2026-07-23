@@ -20,11 +20,18 @@ RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/generation_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/generation_config.json && \
     curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin
 
+RUN pip install --no-cache-dir ctranslate2
+
 RUN python3 -c "from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
     t = AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); \
     m = AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M'); \
-    t.save_pretrained('/opt/nllb'); \
-    m.save_pretrained('/opt/nllb')"
+    t.save_pretrained('/opt/nllb-hf'); \
+    m.save_pretrained('/opt/nllb-hf')"
+
+RUN ct2-transformers-converter --model /opt/nllb-hf --output_dir /opt/nllb \
+      --quantization int8 --force && \
+    cp /opt/nllb-hf/sentencepiece.bpe.model /opt/nllb/ && \
+    rm -rf /opt/nllb-hf
 
 COPY app.py .
 
