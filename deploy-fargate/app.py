@@ -76,13 +76,12 @@ def transcribe():
 
         segments_gen, info = model.transcribe(
             tmp_path,
-            language="fr",
             task="transcribe",
             beam_size=5,
             vad_filter=True,
             vad_parameters=dict(
-                min_silence_duration_ms=500,
-                speech_pad_ms=200,
+                min_silence_duration_ms=300,
+                speech_pad_ms=300,
             ),
         )
 
