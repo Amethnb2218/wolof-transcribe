@@ -1,5 +1,14 @@
 FROM 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-fargate:latest
 
+RUN pip install --no-cache-dir transformers torch --index-url https://download.pytorch.org/whl/cpu && \
+    pip install --no-cache-dir sentencepiece protobuf
+
+RUN python3 -c "from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
+    t = AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); \
+    m = AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M'); \
+    t.save_pretrained('/opt/nllb'); \
+    m.save_pretrained('/opt/nllb')"
+
 COPY app.py /app/app.py
 
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--timeout", "300", "--workers", "1", "app:app"]

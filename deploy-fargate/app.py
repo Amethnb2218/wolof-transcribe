@@ -114,14 +114,27 @@ def transcribe():
             os.unlink(tmp_path)
 
 
-HF_API_TOKEN = os.environ.get("HF_API_TOKEN", "")
-NLLB_URL = "https://api-inference.huggingface.co/models/facebook/nllb-200-distilled-600M"
+NLLB_MODEL_DIR = "/opt/nllb"
+nllb_tokenizer = None
+nllb_model = None
+
+if os.path.exists(NLLB_MODEL_DIR):
+    print("Loading NLLB translation model...", flush=True)
+    from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+    nllb_tokenizer = AutoTokenizer.from_pretrained(NLLB_MODEL_DIR)
+    nllb_model = AutoModelForSeq2SeqLM.from_pretrained(NLLB_MODEL_DIR)
+    print("NLLB model loaded!", flush=True)
+else:
+    print("WARNING: NLLB model not found at /opt/nllb - translation disabled", flush=True)
 
 
 @app.route("/api/translate", methods=["POST", "OPTIONS"])
 def translate():
     if request.method == "OPTIONS":
         return "", 200
+
+    if nllb_model is None:
+        return jsonify({"error": "Translation model not loaded"}), 503
 
     data = request.get_json(force=True)
     text = data.get("text", "").strip()
@@ -131,39 +144,20 @@ def translate():
     if not text:
         return jsonify({"error": "Texte vide"}), 400
 
-    headers = {"Content-Type": "application/json"}
-    if HF_API_TOKEN:
-        headers["Authorization"] = f"Bearer {HF_API_TOKEN}"
-
-    payload = {
-        "inputs": text,
-        "parameters": {"src_lang": src_lang, "tgt_lang": tgt_lang},
-        "options": {"wait_for_model": True},
-    }
-
     try:
-        resp = requests.post(NLLB_URL, headers=headers, json=payload, timeout=60)
+        nllb_tokenizer.src_lang = src_lang
+        inputs = nllb_tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+        tgt_lang_id = nllb_tokenizer.convert_tokens_to_ids(tgt_lang)
 
-        if resp.status_code == 503:
-            wait_time = min(resp.json().get("estimated_time", 20), 30)
-            time.sleep(wait_time)
-            resp = requests.post(NLLB_URL, headers=headers, json=payload, timeout=60)
-
-        if resp.status_code != 200:
-            return jsonify({"error": f"HuggingFace error: {resp.status_code}"}), 502
-
-        result = resp.json()
-        if isinstance(result, list) and len(result) > 0:
-            translation = result[0].get("translation_text", "")
-        elif isinstance(result, dict):
-            translation = result.get("translation_text", "")
-        else:
-            translation = ""
+        translated = nllb_model.generate(
+            **inputs,
+            forced_bos_token_id=tgt_lang_id,
+            max_new_tokens=256,
+        )
+        translation = nllb_tokenizer.decode(translated[0], skip_special_tokens=True)
 
         return jsonify({"translation_text": translation})
 
-    except requests.Timeout:
-        return jsonify({"error": "Timeout traduction"}), 504
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

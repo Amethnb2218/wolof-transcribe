@@ -4,7 +4,8 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn requests
+RUN pip install --no-cache-dir flask flask-cors faster-whisper gunicorn transformers torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir sentencepiece protobuf
 
 RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/config.json && \
@@ -18,6 +19,12 @@ RUN mkdir -p /opt/model && \
     curl -sL -o /opt/model/preprocessor_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/preprocessor_config.json && \
     curl -sL -o /opt/model/generation_config.json https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/generation_config.json && \
     curl --http1.1 --retry 3 --retry-delay 5 -L -o /opt/model/model.bin https://huggingface.co/momosl/whisper-wolof-v2-ct2/resolve/main/model.bin
+
+RUN python3 -c "from transformers import AutoTokenizer, AutoModelForSeq2SeqLM; \
+    t = AutoTokenizer.from_pretrained('facebook/nllb-200-distilled-600M'); \
+    m = AutoModelForSeq2SeqLM.from_pretrained('facebook/nllb-200-distilled-600M'); \
+    t.save_pretrained('/opt/nllb'); \
+    m.save_pretrained('/opt/nllb')"
 
 COPY app.py .
 
