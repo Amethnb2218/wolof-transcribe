@@ -23,8 +23,8 @@ phases:
     commands:
       - mkdir -p /tmp/fargate && cd /tmp/fargate
       - curl -sL -o app.py https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/app.py
-      - curl -sL -o Dockerfile.hotfix https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/Dockerfile.hotfix
-      - docker build --platform linux/amd64 -f Dockerfile.hotfix -t wolof-asr-fargate .
+      - curl -sL -o Dockerfile https://raw.githubusercontent.com/Amethnb2218/wolof-transcribe/main/deploy-fargate/Dockerfile
+      - docker build --platform linux/amd64 -f Dockerfile -t wolof-asr-fargate .
   post_build:
     commands:
       - docker tag wolof-asr-fargate:latest 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-fargate:latest
