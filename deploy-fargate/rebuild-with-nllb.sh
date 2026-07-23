@@ -69,7 +69,7 @@ TASK_DEF=$(cat << 'TDEOF'
   "networkMode": "awsvpc",
   "requiresCompatibilities": ["FARGATE"],
   "cpu": "2048",
-  "memory": "6144",
+  "memory": "8192",
   "executionRoleArn": "arn:aws:iam::335596040822:role/ecsTaskExecutionRole",
   "containerDefinitions": [
     {
