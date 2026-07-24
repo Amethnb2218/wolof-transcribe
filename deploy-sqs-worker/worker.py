@@ -1,9 +1,15 @@
-"""Wolof ASR SQS Worker — polls jobs, transcribes + translates, writes results."""
+"""Wolof ASR SQS Worker — polls jobs, transcribes + translates, writes results.
+Short audio (<2 min) -> local CPU (4 vCPU, ~90s)
+Long audio (>=2 min) -> Kaggle GPU (2x T4, ~10s/min)
+"""
 import os
 import json
 import time
 import tempfile
 import signal
+import subprocess
+import base64
+import urllib.request
 import boto3
 from faster_whisper import WhisperModel
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
@@ -16,6 +22,12 @@ MODEL_DIR = "/opt/model"
 NLLB_MODEL_DIR = "/opt/nllb"
 VISIBILITY_TIMEOUT = 900
 HEARTBEAT_INTERVAL = 300
+
+# Kaggle config (for long audio offloading)
+KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "")
+KAGGLE_KEY = os.environ.get("KAGGLE_KEY", "")
+KAGGLE_KERNEL_SLUG = os.environ.get("KAGGLE_KERNEL_SLUG", "")
+LONG_AUDIO_THRESHOLD_SEC = 120  # 2 min — above this, use Kaggle GPU
 
 sqs = boto3.client("sqs", region_name=REGION)
 s3 = boto3.client("s3", region_name=REGION)
@@ -150,6 +162,134 @@ def translate_segments(segments, src_lang="wol_Latn", tgt_lang="fra_Latn"):
     return full_translation.strip(), translated_segments
 
 
+def get_audio_duration_ffprobe(filepath):
+    """Get audio duration in seconds using ffprobe (if available) or file size estimate."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", filepath],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0:
+            return float(result.stdout.strip())
+    except (FileNotFoundError, ValueError, subprocess.TimeoutExpired):
+        pass
+    # Rough estimate: 1 MB ~= 60s for compressed audio
+    size_mb = os.path.getsize(filepath) / (1024 * 1024)
+    return size_mb * 60
+
+
+def trigger_kaggle_gpu(job_id, input_key):
+    """Push a Kaggle kernel to process this job on GPU."""
+    if not KAGGLE_USERNAME or not KAGGLE_KEY or not KAGGLE_KERNEL_SLUG:
+        return False
+
+    auth = base64.b64encode(f"{KAGGLE_USERNAME}:{KAGGLE_KEY}".encode()).decode()
+
+    kernel_script = f'''import os
+os.environ["JOB_ID"] = "{job_id}"
+os.environ["AUDIO_KEY"] = "{input_key}"
+os.environ["S3_BUCKET"] = "{RESULTS_BUCKET}"
+
+from kaggle_secrets import UserSecretsClient
+secrets = UserSecretsClient()
+os.environ["AWS_ACCESS_KEY_ID"] = secrets.get_secret("AWS_ACCESS_KEY_ID")
+os.environ["AWS_SECRET_ACCESS_KEY"] = secrets.get_secret("AWS_SECRET_ACCESS_KEY")
+
+exec(open("/kaggle/input/wolof-transcriber-script/kaggle-kernel.py").read())
+'''
+
+    payload = json.dumps({
+        "id": KAGGLE_KERNEL_SLUG,
+        "newTitle": f"wolof-job-{job_id[:8]}",
+        "text": kernel_script,
+        "language": "python",
+        "kernelType": "script",
+        "isPrivate": True,
+        "enableGpu": True,
+        "enableInternet": True,
+    }).encode()
+
+    req = urllib.request.Request(
+        "https://www.kaggle.com/api/v1/kernels/push",
+        data=payload,
+        headers={
+            "Authorization": f"Basic {auth}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        result = json.loads(resp.read().decode())
+        print(f"  Kaggle kernel pushed: {result}", flush=True)
+        return True
+    except Exception as e:
+        print(f"  Kaggle push failed: {e} — falling back to CPU", flush=True)
+        return False
+
+
+def poll_kaggle_completion(job_id, receipt_handle, timeout_sec=1800):
+    """Poll S3 for Kaggle job completion (Kaggle writes results directly to S3)."""
+    start = time.time()
+    while time.time() - start < timeout_sec:
+        try:
+            obj = s3.get_object(Bucket=RESULTS_BUCKET, Key=f"jobs/{job_id}/status.json")
+            status_data = json.loads(obj["Body"].read().decode("utf-8"))
+            kaggle_status = status_data.get("status", "")
+
+            if kaggle_status == "done":
+                # Kaggle finished — update DynamoDB and delete SQS message
+                update_job_status(
+                    job_id, "COMPLETED",
+                    stage="DONE",
+                    progress=100,
+                    completed_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    result_key=f"results/{job_id}.json",
+                    duration=str(status_data.get("processing_time", 0)),
+                    device="gpu-t4-kaggle",
+                )
+                sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt_handle)
+                print(f"  Job {job_id} COMPLETED via Kaggle GPU", flush=True)
+                return True
+            elif kaggle_status == "failed":
+                error = status_data.get("error", "Kaggle execution failed")
+                update_job_status(job_id, "FAILED", stage="ERROR", error=error)
+                sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt_handle)
+                print(f"  Job {job_id} FAILED on Kaggle: {error}", flush=True)
+                return True
+            else:
+                # Still processing — update stage in DynamoDB
+                stage_label = kaggle_status.upper() if kaggle_status else "KAGGLE_GPU"
+                update_job_status(job_id, "PROCESSING", stage=stage_label, progress=50)
+
+        except s3.exceptions.NoSuchKey:
+            pass
+        except Exception as e:
+            print(f"  Kaggle poll error: {e}", flush=True)
+
+        # Extend SQS visibility if needed
+        elapsed = time.time() - start
+        if elapsed > 600 and elapsed % 300 < 15:
+            try:
+                sqs.change_message_visibility(
+                    QueueUrl=QUEUE_URL,
+                    ReceiptHandle=receipt_handle,
+                    VisibilityTimeout=900,
+                )
+            except Exception:
+                pass
+
+        time.sleep(15)
+
+    # Timeout — Kaggle took too long
+    print(f"  Kaggle timeout for job {job_id} — marking failed", flush=True)
+    update_job_status(job_id, "FAILED", stage="ERROR", error="Kaggle GPU timeout (30 min)")
+    sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt_handle)
+    return False
+
+
 def process_job(message):
     body = json.loads(message["Body"])
     job_id = body["job_id"]
@@ -177,6 +317,27 @@ def process_job(message):
         file_size = os.path.getsize(tmp_path)
         print(f"  Downloaded {file_size / (1024*1024):.1f} MB", flush=True)
 
+        # Check duration — route to Kaggle GPU if long audio
+        audio_duration_est = get_audio_duration_ffprobe(tmp_path)
+        print(f"  Estimated duration: {audio_duration_est:.0f}s", flush=True)
+
+        if audio_duration_est >= LONG_AUDIO_THRESHOLD_SEC and KAGGLE_USERNAME:
+            print(f"  Long audio ({audio_duration_est:.0f}s) — routing to Kaggle GPU", flush=True)
+            update_job_status(job_id, "PROCESSING", stage="KAGGLE_GPU", progress=10)
+            # Clean up local file — Kaggle will download from S3 directly
+            os.unlink(tmp_path)
+            tmp_path = None
+            if trigger_kaggle_gpu(job_id, input_key):
+                poll_kaggle_completion(job_id, receipt_handle)
+                return
+            else:
+                # Kaggle unavailable — fall back to local CPU
+                print(f"  Kaggle unavailable — processing locally on CPU", flush=True)
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".audio") as f:
+                    s3.download_fileobj(input_bucket, input_key, f)
+                    tmp_path = f.name
+
+        # === LOCAL CPU PROCESSING ===
         # Transcribe
         update_job_status(job_id, "PROCESSING", stage="TRANSCRIBING", progress=25)
         t0 = time.time()
@@ -186,6 +347,7 @@ def process_job(message):
 
         # Translate
         translation = None
+        translate_time = 0
         translated_segs = []
         if nllb_tokenizer and result["text"]:
             update_job_status(job_id, "PROCESSING", stage="TRANSLATING", progress=70)
@@ -202,7 +364,7 @@ def process_job(message):
             "segments": result["segments"],
             "language": result["language"],
             "duration": result["duration"],
-            "processing_time": round(transcribe_time + (translate_time if translation else 0), 1),
+            "processing_time": round(transcribe_time + translate_time, 1),
             "device": "cpu-4vcpu",
             "pipeline_version": "whisper-nllb-v2",
         }
@@ -246,7 +408,7 @@ def process_job(message):
 
         # Delete message from SQS
         sqs.delete_message(QueueUrl=QUEUE_URL, ReceiptHandle=receipt_handle)
-        print(f"  Job {job_id} COMPLETED", flush=True)
+        print(f"  Job {job_id} COMPLETED (CPU)", flush=True)
 
     except Exception as e:
         print(f"  ERROR processing job {job_id}: {e}", flush=True)

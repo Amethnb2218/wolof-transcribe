@@ -309,6 +309,9 @@ export default function App() {
       DOWNLOADING: "Telechargement...",
       TRANSCRIBING: "Transcription en cours...",
       TRANSLATING: "Traduction en cours...",
+      KAGGLE_GPU: "Transcription GPU (Kaggle T4)...",
+      LOADING_MODEL: "Chargement du modele GPU...",
+      UPLOADING: "Finalisation...",
       DONE: "Finalisation...",
     };
     return new Promise((resolve, reject) => {
