@@ -29,7 +29,6 @@ import "./App.css";
 const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6zycjezzgfcjine4fhvsceohz40hetxs.lambda-url.us-east-1.on.aws/";
 let API_URL = BATCH_API_URL;
 
-const MINI_SERVER_URL = import.meta.env.VITE_MINI_SERVER_URL || "";
 const SHORT_AUDIO_THRESHOLD = 50 * 1024 * 1024; // 50 MB (~10 min audio)
 
 const NLLB_LANG_CODES = {
@@ -285,7 +284,7 @@ export default function App() {
   const transcribeViaMiniServer = async (audioFile) => {
     setStatusMessage("Transcription instantanee...");
     const arrayBuffer = await audioFile.arrayBuffer();
-    const response = await fetch(MINI_SERVER_URL + "/", {
+    const response = await fetch(API_URL + "transcribe", {
       method: "POST",
       headers: { "Content-Type": audioFile.type || "audio/mpeg" },
       body: arrayBuffer,
@@ -356,7 +355,7 @@ export default function App() {
     try {
       const isShortAudio = file.size < SHORT_AUDIO_THRESHOLD;
 
-      if (isShortAudio && MINI_SERVER_URL) {
+      if (isShortAudio) {
         // Short audio → Mini-server (instant, ~5 sec)
         setStatusMessage("Transcription instantanee...");
         const result = await transcribeViaMiniServer(file);
