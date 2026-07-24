@@ -328,7 +328,7 @@ export default function App() {
           pollingRef.current = null;
           reject(err);
         }
-      }, 5000);
+      }, 2000);
     });
   };
 
