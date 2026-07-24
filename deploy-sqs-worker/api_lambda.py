@@ -74,10 +74,10 @@ def handle_upload(event):
     s3_key = f"uploads/{job_id}/{filename}"
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
-    # Create presigned upload URL
+    # Create presigned upload URL (no ContentType constraint — accept any audio format)
     presigned_url = s3.generate_presigned_url(
         "put_object",
-        Params={"Bucket": S3_BUCKET, "Key": s3_key, "ContentType": content_type},
+        Params={"Bucket": S3_BUCKET, "Key": s3_key},
         ExpiresIn=3600,
     )
 

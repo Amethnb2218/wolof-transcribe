@@ -297,7 +297,6 @@ export default function App() {
     setStatusMessage("Upload du fichier...");
     const uploadToS3 = await fetch(upload_url, {
       method: "PUT",
-      headers: { "Content-Type": "audio/*" },
       body: audioFile,
     });
     if (!uploadToS3.ok) throw new Error("Echec upload");
