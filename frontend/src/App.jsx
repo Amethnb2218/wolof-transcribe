@@ -284,10 +284,11 @@ export default function App() {
   const uploadAndPoll = async (audioFile) => {
     // 1. Get presigned URL + job_id (API sends SQS message)
     setStatusMessage("Preparation...");
+    const fileContentType = audioFile.type || "application/octet-stream";
     const uploadRes = await fetch(API_URL + "upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: audioFile.name }),
+      body: JSON.stringify({ filename: audioFile.name, content_type: fileContentType }),
     });
     if (!uploadRes.ok) throw new Error("Erreur preparation upload");
     const { job_id, upload_url } = await uploadRes.json();
@@ -297,6 +298,7 @@ export default function App() {
     setStatusMessage("Upload du fichier...");
     const uploadToS3 = await fetch(upload_url, {
       method: "PUT",
+      headers: { "Content-Type": fileContentType },
       body: audioFile,
     });
     if (!uploadToS3.ok) throw new Error("Echec upload");
