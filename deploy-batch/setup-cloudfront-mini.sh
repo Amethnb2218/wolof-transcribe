@@ -8,7 +8,6 @@ ORIGIN_PORT="8080"
 
 echo "=== CLOUDFRONT HTTPS SETUP ==="
 
-# Create CloudFront distribution
 echo ""
 echo "[1/2] Creating CloudFront distribution..."
 
@@ -23,11 +22,7 @@ DIST_ID=$(aws cloudfront create-distribution \
       \"AllowedMethods\": {\"Quantity\": 7, \"Items\": [\"GET\",\"HEAD\",\"OPTIONS\",\"PUT\",\"POST\",\"PATCH\",\"DELETE\"], \"CachedMethods\": {\"Quantity\": 2, \"Items\": [\"GET\",\"HEAD\"]}},
       \"CachePolicyId\": \"4135ea2d-6df8-44a3-9df3-4b5a84be39ad\",
       \"OriginRequestPolicyId\": \"216adef6-5c7f-47e4-b989-5492eafa07d3\",
-      \"Compress\": true,
-      \"ForwardedValues\": {\"QueryString\": true, \"Cookies\": {\"Forward\": \"none\"}, \"Headers\": {\"Quantity\": 3, \"Items\": [\"Content-Type\",\"Accept\",\"Origin\"]}},
-      \"MinTTL\": 0,
-      \"DefaultTTL\": 0,
-      \"MaxTTL\": 0
+      \"Compress\": true
     },
     \"Origins\": {
       \"Quantity\": 1,
