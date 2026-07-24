@@ -8,7 +8,7 @@ batch = boto3.client("batch")
 s3 = boto3.client("s3")
 
 JOB_QUEUE = os.environ.get("JOB_QUEUE", "wolof-transcription-queue")
-JOB_DEFINITION = os.environ.get("JOB_DEFINITION", "wolof-transcribe-gpu")
+JOB_DEFINITION = os.environ.get("JOB_DEFINITION", "wolof-transcribe-cpu")
 S3_BUCKET = os.environ.get("S3_BUCKET", "wolof-transcriber-audio")
 
 

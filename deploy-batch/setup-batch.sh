@@ -293,7 +293,7 @@ batch = boto3.client("batch")
 s3 = boto3.client("s3")
 
 JOB_QUEUE = os.environ.get("JOB_QUEUE", "wolof-transcription-queue")
-JOB_DEFINITION = os.environ.get("JOB_DEFINITION", "wolof-transcribe-gpu")
+JOB_DEFINITION = os.environ.get("JOB_DEFINITION", "wolof-transcribe-cpu")
 S3_BUCKET = os.environ.get("S3_BUCKET", "wolof-transcriber-audio")
 
 def lambda_handler(event, context):
@@ -349,7 +349,7 @@ aws lambda create-function \
   --handler index.lambda_handler \
   --zip-file fileb://lambda.zip \
   --timeout 30 \
-  --environment "Variables={JOB_QUEUE=wolof-transcription-queue,JOB_DEFINITION=wolof-transcribe-gpu,S3_BUCKET=$S3_BUCKET}" \
+  --environment "Variables={JOB_QUEUE=wolof-transcription-queue,JOB_DEFINITION=wolof-transcribe-cpu,S3_BUCKET=$S3_BUCKET}" \
   --region $REGION > /dev/null 2>&1 || \
 aws lambda update-function-code \
   --function-name wolof-batch-trigger \
@@ -509,14 +509,14 @@ fi
 
 # ============================================
 echo ""
-echo "[14/14] Build GPU Docker Image (CodeBuild)..."
+echo "[14/14] Build CPU Docker Image (CodeBuild)..."
 
 aws codebuild update-project \
   --name "wolof-fargate-build" \
   --source '{
     "type": "GITHUB",
     "location": "https://github.com/Amethnb2218/wolof-transcribe.git",
-    "buildspec": "deploy-batch/buildspec-gpu.yml",
+    "buildspec": "deploy-batch/buildspec-cpu.yml",
     "gitCloneDepth": 1
   }' \
   --source-version "main" \

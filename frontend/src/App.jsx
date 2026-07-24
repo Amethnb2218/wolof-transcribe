@@ -26,7 +26,7 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const BATCH_API_URL = import.meta.env.VITE_API_URL || "BATCH_API_PLACEHOLDER";
+const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6zycjezzgfcjine4fhvsceohz40hetxs.lambda-url.us-east-1.on.aws/";
 let API_URL = BATCH_API_URL;
 
 const NLLB_LANG_CODES = {
