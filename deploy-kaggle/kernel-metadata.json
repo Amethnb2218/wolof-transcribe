@@ -1,5 +1,5 @@
 {
-  "id": "INSERT_USERNAME/wolof-transcriber-gpu",
+  "id": "amethsl/wolof-transcriber-gpu",
   "title": "Wolof Transcriber GPU",
   "code_file": "kaggle-kernel.py",
   "language": "python",
