@@ -210,8 +210,7 @@ PUSH_PAYLOAD=$(python3 -c "
 import json
 script = '''$KERNEL_SCRIPT'''
 payload = {
-    'id': 'amethsl/wolof-transcriber-gpu',
-    'title': 'Wolof Transcriber GPU',
+    'title': 'wolof-transcriber-gpu',
     'text': script,
     'language': 'python',
     'kernel_type': 'script',
