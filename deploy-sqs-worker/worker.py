@@ -24,9 +24,9 @@ VISIBILITY_TIMEOUT = 900
 HEARTBEAT_INTERVAL = 300
 
 # Kaggle config (for long audio offloading)
-KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "")
-KAGGLE_KEY = os.environ.get("KAGGLE_KEY", "")
-KAGGLE_KERNEL_SLUG = os.environ.get("KAGGLE_KERNEL_SLUG", "")
+KAGGLE_USERNAME = os.environ.get("KAGGLE_USERNAME", "amethsl")
+KAGGLE_API_TOKEN = os.environ.get("KAGGLE_API_TOKEN", "")
+KAGGLE_KERNEL_SLUG = os.environ.get("KAGGLE_KERNEL_SLUG", "amethsl/wolof-transcriber-gpu")
 LONG_AUDIO_THRESHOLD_SEC = 120  # 2 min — above this, use Kaggle GPU
 
 sqs = boto3.client("sqs", region_name=REGION)
@@ -181,10 +181,10 @@ def get_audio_duration_ffprobe(filepath):
 
 def trigger_kaggle_gpu(job_id, input_key):
     """Push a Kaggle kernel to process this job on GPU."""
-    if not KAGGLE_USERNAME or not KAGGLE_KEY or not KAGGLE_KERNEL_SLUG:
+    if not KAGGLE_API_TOKEN or not KAGGLE_KERNEL_SLUG:
         return False
 
-    auth = base64.b64encode(f"{KAGGLE_USERNAME}:{KAGGLE_KEY}".encode()).decode()
+    auth = f"Bearer {KAGGLE_API_TOKEN}"
 
     kernel_script = f'''import os
 os.environ["JOB_ID"] = "{job_id}"
@@ -214,7 +214,7 @@ exec(open("/kaggle/input/wolof-transcriber-script/kaggle-kernel.py").read())
         "https://www.kaggle.com/api/v1/kernels/push",
         data=payload,
         headers={
-            "Authorization": f"Basic {auth}",
+            "Authorization": auth,
             "Content-Type": "application/json",
         },
         method="POST",
