@@ -26,7 +26,7 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6zycjezzgfcjine4fhvsceohz40hetxs.lambda-url.us-east-1.on.aws/";
+const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://d8x2g8k8bh.execute-api.us-east-1.amazonaws.com/";
 let API_URL = BATCH_API_URL;
 
 const SHORT_AUDIO_THRESHOLD = 50 * 1024 * 1024; // 50 MB (~10 min audio)
@@ -281,18 +281,20 @@ export default function App() {
   const pollingRef = useRef(null);
   const jobIdRef = useRef(null);
 
-  const transcribeViaMiniServer = async (audioFile) => {
-    // 1. Get presigned URL and upload to S3
+  const uploadAndPoll = async (audioFile) => {
+    // 1. Get presigned URL
     setStatusMessage("Upload...");
     const uploadRes = await fetch(API_URL + "upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: audioFile.name, mode: "mini" }),
+      body: JSON.stringify({ filename: audioFile.name }),
     });
     if (!uploadRes.ok) throw new Error("Erreur preparation upload");
     const { job_id, upload_url } = await uploadRes.json();
     jobIdRef.current = job_id;
 
+    // 2. Upload to S3
+    setStatusMessage("Upload du fichier...");
     const uploadToS3 = await fetch(upload_url, {
       method: "PUT",
       headers: { "Content-Type": "audio/*" },
@@ -300,39 +302,8 @@ export default function App() {
     });
     if (!uploadToS3.ok) throw new Error("Echec upload");
 
-    // 2. Tell Lambda to transcribe via mini-server
-    setStatusMessage("Transcription instantanee...");
-    const response = await fetch(API_URL + "transcribe-s3", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ job_id, audio_key: `uploads/${job_id}/audio.${audioFile.name.split('.').pop()}` }),
-    });
-    if (!response.ok) throw new Error("Erreur transcription");
-    return await response.json();
-  };
-
-  const transcribeViaKaggle = async (audioFile) => {
-    // 1. Get presigned upload URL
-    setStatusMessage("Upload vers le serveur...");
-    const uploadRes = await fetch(API_URL + "upload", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: audioFile.name }),
-    });
-    if (!uploadRes.ok) throw new Error("Impossible de preparer l'upload");
-    const { job_id, upload_url } = await uploadRes.json();
-    jobIdRef.current = job_id;
-
-    // 2. Upload file directly to S3
-    const uploadToS3 = await fetch(upload_url, {
-      method: "PUT",
-      headers: { "Content-Type": "audio/*" },
-      body: audioFile,
-    });
-    if (!uploadToS3.ok) throw new Error("Echec de l'upload");
-
-    // 3. Poll for status
-    setStatusMessage("Transcription Kaggle GPU en cours (5-10 min)...");
+    // 3. Poll for status (Lambda trigger handles routing to mini-server or Kaggle)
+    setStatusMessage("Transcription en cours...");
     return new Promise((resolve, reject) => {
       pollingRef.current = setInterval(async () => {
         try {
@@ -371,31 +342,16 @@ export default function App() {
     setProgress({ chunk: 0, total: 0 });
 
     try {
-      const isShortAudio = file.size < SHORT_AUDIO_THRESHOLD;
-
-      if (isShortAudio) {
-        // Short audio → Mini-server (instant, ~5 sec)
-        setStatusMessage("Transcription instantanee...");
-        const result = await transcribeViaMiniServer(file);
-        setTranscription(result.text || "");
-        setSegments(result.segments || []);
-        setDuration(result.duration || 0);
-        setStatus("done");
-        setStatusMessage(`Transcription terminee ! (${Math.round(result.processing_time || 0)}s)`);
-      } else {
-        // Long audio → Kaggle (supports 6h+)
-        setStatusMessage("Audio long detecte — envoi vers Kaggle GPU...");
-        const result = await transcribeViaKaggle(file);
-        setTranscription(result.text || "");
-        setSegments(result.segments || []);
-        setDuration(result.duration || 0);
-        if (result.translation) {
-          setTranslatedText(result.translation);
-          setShowTranslation(true);
-        }
-        setStatus("done");
-        setStatusMessage(`Transcription terminee ! (${result.device || "kaggle-gpu"}, ${Math.round(result.processing_time || 0)}s)`);
+      const result = await uploadAndPoll(file);
+      setTranscription(result.text || "");
+      setSegments(result.segments || []);
+      setDuration(result.duration || 0);
+      if (result.translation) {
+        setTranslatedText(result.translation);
+        setShowTranslation(true);
       }
+      setStatus("done");
+      setStatusMessage(`Transcription terminee ! (${result.device || "gpu"}, ${Math.round(result.processing_time || 0)}s)`);
     } catch (err) {
       setStatus("error");
       setStatusMessage(`Erreur: ${err.message}`);
