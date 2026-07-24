@@ -239,18 +239,10 @@ aws batch register-job-definition \
       {\"name\": \"S3_BUCKET\", \"value\": \"$S3_BUCKET\"}
     ]
   }" \
-  --retry-strategy "{
-    \"attempts\": 3,
-    \"evaluateOnExit\": [
-      {\"onStatusReason\": \"Host EC2*terminated\", \"action\": \"RETRY\"},
-      {\"onReason\": \"*spot*\", \"action\": \"RETRY\"},
-      {\"onReason\": \"*Spot*\", \"action\": \"RETRY\"},
-      {\"onExitCode\": \"1\", \"action\": \"EXIT\"}
-    ]
-  }" \
-  --timeout "{\"attemptDurationSeconds\": 10800}" \
+  --retry-strategy '{"attempts": 3, "evaluateOnExit": [{"onExitCode": "137", "action": "RETRY"}, {"onExitCode": "1", "action": "EXIT"}, {"action": "RETRY"}]}' \
+  --timeout '{"attemptDurationSeconds": 10800}' \
   --region $REGION > /dev/null
-echo "  wolof-transcribe-gpu (4 vCPU, 14GB, 1 GPU, 3h timeout, 3 retries)"
+echo "  wolof-transcribe-gpu (4 vCPU, 14GB, 1 GPU, 3h timeout, 3 retries on crash/spot)"
 
 # CPU/Fargate Job
 aws batch register-job-definition \
@@ -391,7 +383,133 @@ echo "  S3 -> Lambda trigger on uploads/ prefix"
 
 # ============================================
 echo ""
-echo "[12/12] Build GPU Docker Image (CodeBuild)..."
+echo "[12/14] API Lambda (pour le frontend)..."
+
+cd /tmp
+rm -rf wolof-api-lambda
+mkdir wolof-api-lambda && cd wolof-api-lambda
+cat > index.py << 'PYEOF'
+import json
+import os
+import uuid
+import boto3
+
+s3 = boto3.client("s3")
+S3_BUCKET = os.environ.get("S3_BUCKET", "wolof-transcriber-audio")
+
+def lambda_handler(event, context):
+    method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
+    path = event.get("rawPath", "/")
+    headers = {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "*",
+    }
+    if method == "OPTIONS":
+        return {"statusCode": 200, "headers": headers, "body": ""}
+
+    if method == "POST" and "/upload" in path:
+        body = json.loads(event.get("body", "{}"))
+        filename = body.get("filename", "audio.mp3")
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else "mp3"
+        job_id = str(uuid.uuid4())
+        audio_key = f"uploads/{job_id}/audio.{ext}"
+        presigned = s3.generate_presigned_url(
+            "put_object",
+            Params={"Bucket": S3_BUCKET, "Key": audio_key, "ContentType": "audio/*"},
+            ExpiresIn=3600,
+        )
+        return {"statusCode": 200, "headers": headers, "body": json.dumps({"job_id": job_id, "upload_url": presigned, "audio_key": audio_key})}
+
+    if "/status/" in path:
+        job_id = path.split("/status/")[-1].strip("/")
+        try:
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=f"jobs/{job_id}/status.json")
+            return {"statusCode": 200, "headers": headers, "body": obj["Body"].read().decode()}
+        except:
+            return {"statusCode": 200, "headers": headers, "body": json.dumps({"status": "pending", "job_id": job_id})}
+
+    if "/result/" in path:
+        job_id = path.split("/result/")[-1].strip("/")
+        try:
+            obj = s3.get_object(Bucket=S3_BUCKET, Key=f"results/{job_id}.json")
+            return {"statusCode": 200, "headers": headers, "body": obj["Body"].read().decode()}
+        except:
+            return {"statusCode": 404, "headers": headers, "body": json.dumps({"error": "Not ready"})}
+
+    if "/health" in path:
+        return {"statusCode": 200, "headers": headers, "body": json.dumps({"status": "ok", "mode": "batch-gpu"})}
+
+    return {"statusCode": 404, "headers": headers, "body": json.dumps({"error": "Not found"})}
+PYEOF
+
+zip -j api-lambda.zip index.py
+
+# Create or update API Lambda
+aws lambda create-function \
+  --function-name wolof-batch-api \
+  --runtime python3.12 \
+  --role "arn:aws:iam::$ACCOUNT:role/wolof-batch-lambda-role" \
+  --handler index.lambda_handler \
+  --zip-file fileb://api-lambda.zip \
+  --timeout 30 \
+  --environment "Variables={S3_BUCKET=$S3_BUCKET}" \
+  --region $REGION > /dev/null 2>&1 || \
+aws lambda update-function-code \
+  --function-name wolof-batch-api \
+  --zip-file fileb://api-lambda.zip \
+  --region $REGION > /dev/null
+
+# Add S3 permissions to Lambda role
+aws iam put-role-policy --role-name wolof-batch-lambda-role --policy-name s3-full --policy-document "{
+  \"Version\": \"2012-10-17\",
+  \"Statement\": [{
+    \"Effect\": \"Allow\",
+    \"Action\": [\"s3:*\"],
+    \"Resource\": [\"arn:aws:s3:::$S3_BUCKET\", \"arn:aws:s3:::$S3_BUCKET/*\"]
+  }]
+}"
+
+# Create Function URL (public, no auth)
+aws lambda create-function-url-config \
+  --function-name wolof-batch-api \
+  --auth-type NONE \
+  --cors '{"AllowOrigins":["*"],"AllowMethods":["*"],"AllowHeaders":["*"]}' \
+  --region $REGION > /dev/null 2>&1 || true
+
+aws lambda add-permission \
+  --function-name wolof-batch-api \
+  --statement-id public-access \
+  --action lambda:InvokeFunctionUrl \
+  --principal "*" \
+  --function-url-auth-type NONE \
+  --region $REGION 2>/dev/null || true
+
+API_URL=$(aws lambda get-function-url-config --function-name wolof-batch-api --region $REGION --query 'FunctionUrl' --output text)
+echo "  API URL: $API_URL"
+echo "  Endpoints: POST /upload, GET /status/{id}, GET /result/{id}"
+
+# ============================================
+echo ""
+echo "[13/14] Suppression ancien service Fargate (économie $185/mois)..."
+aws ecs delete-service --cluster wolof-asr-cluster --service wolof-asr-service --force --region $REGION > /dev/null 2>&1 || true
+echo "  Service ECS supprimé"
+# Delete ALB
+ALB_ARN=$(aws elbv2 describe-load-balancers --names wolof-asr-alb --region $REGION --query 'LoadBalancers[0].LoadBalancerArn' --output text 2>/dev/null || echo "None")
+if [ "$ALB_ARN" != "None" ] && [ -n "$ALB_ARN" ]; then
+  aws elbv2 delete-load-balancer --load-balancer-arn "$ALB_ARN" --region $REGION 2>/dev/null || true
+  echo "  ALB supprimé"
+fi
+TG_ARN=$(aws elbv2 describe-target-groups --names wolof-asr-tg --region $REGION --query 'TargetGroups[0].TargetGroupArn' --output text 2>/dev/null || echo "None")
+if [ "$TG_ARN" != "None" ] && [ -n "$TG_ARN" ]; then
+  aws elbv2 delete-target-group --target-group-arn "$TG_ARN" --region $REGION 2>/dev/null || true
+  echo "  Target Group supprimé"
+fi
+
+# ============================================
+echo ""
+echo "[14/14] Build GPU Docker Image (CodeBuild)..."
 
 aws codebuild update-project \
   --name "wolof-fargate-build" \
@@ -435,9 +553,12 @@ echo "=== SETUP COMPLETE ==="
 echo "============================================"
 echo ""
 echo "Architecture:"
-echo "  S3 upload -> Lambda -> Batch (GPU Spot > GPU OD > CPU Fargate)"
+echo "  Frontend -> API ($API_URL) -> S3 -> Lambda -> Batch GPU"
 echo ""
-echo "Test:"
+echo "API URL (pour le frontend):"
+echo "  $API_URL"
+echo ""
+echo "Test en ligne de commande:"
 echo "  1. Upload audio: aws s3 cp test.mp3 s3://$S3_BUCKET/uploads/test-001/audio.mp3"
 echo "  2. Check status: aws s3 cp s3://$S3_BUCKET/jobs/test-001/status.json -"
 echo "  3. Get result:   aws s3 cp s3://$S3_BUCKET/results/test-001.json -"
@@ -448,5 +569,4 @@ echo "  GPU OD:      ~\$0.13  per 6h audio (15 min processing)"
 echo "  CPU Fargate: ~\$0.20  per 6h audio (2h processing)"
 echo "  Idle:        \$0/month (scale to zero)"
 echo ""
-echo "Old Fargate 24/7 service can now be deleted:"
-echo "  aws ecs delete-service --cluster wolof-asr-cluster --service wolof-asr-service --force"
+echo "Ancien service Fargate supprimé (-\$185/mois)"
