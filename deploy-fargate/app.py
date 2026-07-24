@@ -40,7 +40,7 @@ model = WhisperModel(
     MODEL_DIR,
     device="cpu",
     compute_type="int8",
-    cpu_threads=8,
+    cpu_threads=2,
 )
 print("Whisper model loaded!", flush=True)
 
@@ -76,7 +76,7 @@ def transcribe():
         segments_gen, info = model.transcribe(
             tmp_path,
             task="transcribe",
-            beam_size=5,
+            beam_size=1,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=300,
