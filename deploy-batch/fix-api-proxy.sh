@@ -4,6 +4,7 @@ set -e
 
 REGION=us-east-1
 MINI_IP="52.91.36.73"
+S3_BUCKET="wolof-transcriber-audio"
 
 echo "=== ADD PROXY TO API LAMBDA ==="
 
