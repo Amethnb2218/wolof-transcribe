@@ -282,8 +282,8 @@ export default function App() {
   const jobIdRef = useRef(null);
 
   const uploadAndPoll = async (audioFile) => {
-    // 1. Get presigned URL
-    setStatusMessage("Upload...");
+    // 1. Get presigned URL + job_id (API sends SQS message)
+    setStatusMessage("Preparation...");
     const uploadRes = await fetch(API_URL + "upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -293,7 +293,7 @@ export default function App() {
     const { job_id, upload_url } = await uploadRes.json();
     jobIdRef.current = job_id;
 
-    // 2. Upload to S3
+    // 2. Upload to S3 (triggers SQS worker)
     setStatusMessage("Upload du fichier...");
     const uploadToS3 = await fetch(upload_url, {
       method: "PUT",
@@ -302,8 +302,15 @@ export default function App() {
     });
     if (!uploadToS3.ok) throw new Error("Echec upload");
 
-    // 3. Poll for status (Lambda trigger handles routing to mini-server or Kaggle)
-    setStatusMessage("Transcription en cours...");
+    // 3. Poll DynamoDB status — no timeout, worker takes as long as needed
+    setStatusMessage("En file d'attente...");
+    const STAGE_LABELS = {
+      WAITING: "En file d'attente...",
+      DOWNLOADING: "Telechargement...",
+      TRANSCRIBING: "Transcription en cours...",
+      TRANSLATING: "Traduction en cours...",
+      DONE: "Finalisation...",
+    };
     return new Promise((resolve, reject) => {
       pollingRef.current = setInterval(async () => {
         try {
@@ -321,14 +328,14 @@ export default function App() {
             pollingRef.current = null;
             reject(new Error(statusData.error || "La transcription a echoue"));
           } else {
-            setStatusMessage(`Transcription GPU en cours... (${statusData.status})`);
+            const label = STAGE_LABELS[statusData.stage] || "Traitement...";
+            const pct = statusData.progress ? ` (${statusData.progress}%)` : "";
+            setStatusMessage(`${label}${pct}`);
           }
         } catch (err) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-          reject(err);
+          // Network glitch — don't fail, just retry next interval
         }
-      }, 2000);
+      }, 3000);
     });
   };
 
