@@ -29,6 +29,7 @@ import "./App.css";
 const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6zycjezzgfcjine4fhvsceohz40hetxs.lambda-url.us-east-1.on.aws/";
 let API_URL = BATCH_API_URL;
 
+const MINI_SERVER_URL = import.meta.env.VITE_MINI_SERVER_URL || "";
 const SHORT_AUDIO_THRESHOLD = 50 * 1024 * 1024; // 50 MB (~10 min audio)
 
 const NLLB_LANG_CODES = {
@@ -281,50 +282,16 @@ export default function App() {
   const pollingRef = useRef(null);
   const jobIdRef = useRef(null);
 
-  const transcribeViaFargateCPU = async (audioFile) => {
-    setStatusMessage("Transcription en cours...");
-    const uploadRes = await fetch(API_URL + "upload", {
+  const transcribeViaMiniServer = async (audioFile) => {
+    setStatusMessage("Transcription instantanee...");
+    const arrayBuffer = await audioFile.arrayBuffer();
+    const response = await fetch(MINI_SERVER_URL + "/", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: audioFile.name, mode: "sync" }),
+      headers: { "Content-Type": audioFile.type || "audio/mpeg" },
+      body: arrayBuffer,
     });
-    if (!uploadRes.ok) throw new Error("Erreur preparation upload");
-    const { job_id, upload_url } = await uploadRes.json();
-    jobIdRef.current = job_id;
-
-    const uploadToS3 = await fetch(upload_url, {
-      method: "PUT",
-      headers: { "Content-Type": "audio/*" },
-      body: audioFile,
-    });
-    if (!uploadToS3.ok) throw new Error("Echec upload");
-
-    setStatusMessage("Transcription CPU en cours...");
-    // Poll with shorter interval for fast results
-    return new Promise((resolve, reject) => {
-      pollingRef.current = setInterval(async () => {
-        try {
-          const statusRes = await fetch(API_URL + "status/" + job_id);
-          const statusData = await statusRes.json();
-          if (statusData.status === "done") {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-            const resultRes = await fetch(API_URL + "result/" + job_id);
-            resolve(await resultRes.json());
-          } else if (statusData.status === "failed") {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-            reject(new Error(statusData.error || "Echec transcription"));
-          } else {
-            setStatusMessage(`Transcription en cours... (${statusData.status})`);
-          }
-        } catch (err) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-          reject(err);
-        }
-      }, 3000);
-    });
+    if (!response.ok) throw new Error("Erreur serveur");
+    return await response.json();
   };
 
   const transcribeViaKaggle = async (audioFile) => {
@@ -389,17 +356,13 @@ export default function App() {
     try {
       const isShortAudio = file.size < SHORT_AUDIO_THRESHOLD;
 
-      if (isShortAudio) {
-        // Short audio → Fargate CPU (fast for short files)
-        setStatusMessage("Transcription rapide...");
-        const result = await transcribeViaFargateCPU(file);
+      if (isShortAudio && MINI_SERVER_URL) {
+        // Short audio → Mini-server (instant, ~5 sec)
+        setStatusMessage("Transcription instantanee...");
+        const result = await transcribeViaMiniServer(file);
         setTranscription(result.text || "");
         setSegments(result.segments || []);
         setDuration(result.duration || 0);
-        if (result.translation) {
-          setTranslatedText(result.translation);
-          setShowTranslation(true);
-        }
         setStatus("done");
         setStatusMessage(`Transcription terminee ! (${Math.round(result.processing_time || 0)}s)`);
       } else {
