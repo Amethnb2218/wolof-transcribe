@@ -3,7 +3,7 @@
 set -e
 
 REGION=us-east-1
-ORIGIN_IP="44.198.161.205"
+ORIGIN_DOMAIN="transcribe.4ura.tech"
 ORIGIN_PORT="8080"
 
 echo "=== CLOUDFRONT HTTPS SETUP ==="
@@ -33,7 +33,7 @@ DIST_ID=$(aws cloudfront create-distribution \
       \"Quantity\": 1,
       \"Items\": [{
         \"Id\": \"wolof-mini\",
-        \"DomainName\": \"$ORIGIN_IP\",
+        \"DomainName\": \"$ORIGIN_DOMAIN\",
         \"CustomOriginConfig\": {
           \"HTTPPort\": $ORIGIN_PORT,
           \"HTTPSPort\": 443,
