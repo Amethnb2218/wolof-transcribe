@@ -26,9 +26,8 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const LAMBDA_URL = "https://hbusqns66bdauqndgwsmcp4dpu0afjlw.lambda-url.us-east-1.on.aws/";
-const LOCAL_URL = "http://localhost:8000/";
-let API_URL = import.meta.env.VITE_API_URL || LAMBDA_URL;
+const BATCH_API_URL = import.meta.env.VITE_API_URL || "BATCH_API_PLACEHOLDER";
+let API_URL = BATCH_API_URL;
 
 const NLLB_LANG_CODES = {
   fr: "fra_Latn",
@@ -37,10 +36,6 @@ const NLLB_LANG_CODES = {
   es: "spa_Latn",
   pt: "por_Latn",
 };
-
-fetch(LOCAL_URL + "api/health", { signal: AbortSignal.timeout(2000) })
-  .then(r => r.ok && (API_URL = LOCAL_URL))
-  .catch(() => {});
 
 function formatTime(seconds) {
   const h = Math.floor(seconds / 3600);
@@ -106,7 +101,6 @@ export default function App() {
   const [translating, setTranslating] = useState(false);
 
   const fileInputRef = useRef(null);
-  const wsRef = useRef(null);
   const timerRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -281,102 +275,84 @@ export default function App() {
     setAudioUrl(URL.createObjectURL(selectedFile));
   };
 
-  // ===== TRANSCRIPTION WITH CHUNKING (up to 5h) =====
-  const CHUNK_SIZE = 15 * 1024 * 1024; // 15 MB per chunk
+  // ===== TRANSCRIPTION ASYNC (upload S3 + Batch GPU) =====
+  const pollingRef = useRef(null);
+  const jobIdRef = useRef(null);
 
   const startTranscription = useCallback(async () => {
     if (!file) return;
 
     setStatus("processing");
-    setStatusMessage("Preparation de l'audio...");
+    setStatusMessage("Upload en cours...");
     setTranscription("");
     setSegments([]);
     setProgress({ chunk: 0, total: 0 });
 
     try {
-      const fileSize = file.size;
-      const contentType = file.type || "application/octet-stream";
+      // 1. Get presigned upload URL
+      const uploadRes = await fetch(API_URL + "upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filename: file.name }),
+      });
+      if (!uploadRes.ok) throw new Error("Impossible de preparer l'upload");
+      const { job_id, upload_url } = await uploadRes.json();
+      jobIdRef.current = job_id;
 
-      if (fileSize <= CHUNK_SIZE) {
-        setStatusMessage("Transcription en cours...");
-        const arrayBuffer = await file.arrayBuffer();
-        const response = await fetch(API_URL, {
-          method: "POST",
-          headers: { "Content-Type": contentType },
-          body: arrayBuffer,
-        });
-        if (!response.ok) {
-          const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
-          throw new Error(err.error || `HTTP ${response.status}`);
-        }
-        const result = await response.json();
-        setTranscription(result.text || "");
-        setSegments(result.segments || []);
-        setDuration(result.duration || 0);
-      } else {
-        const totalChunks = Math.ceil(fileSize / CHUNK_SIZE);
-        setProgress({ chunk: 0, total: totalChunks });
+      // 2. Upload file directly to S3
+      setStatusMessage("Upload vers le serveur...");
+      const uploadToS3 = await fetch(upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": "audio/*" },
+        body: file,
+      });
+      if (!uploadToS3.ok) throw new Error("Echec de l'upload");
 
-        let allSegments = [];
-        let allText = "";
-        let cumulativeDuration = 0;
+      // 3. Poll for status
+      setStatusMessage("Transcription GPU en cours...");
+      pollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(API_URL + "status/" + job_id);
+          const statusData = await statusRes.json();
 
-        for (let i = 0; i < totalChunks; i++) {
-          setProgress({ chunk: i + 1, total: totalChunks });
-          setStatusMessage(`Transcription partie ${i + 1}/${totalChunks}...`);
-
-          const start = i * CHUNK_SIZE;
-          const end = Math.min(start + CHUNK_SIZE, fileSize);
-          const chunkBlob = file.slice(start, end);
-          const chunkBuffer = await chunkBlob.arrayBuffer();
-
-          const response = await fetch(API_URL, {
-            method: "POST",
-            headers: { "Content-Type": contentType },
-            body: chunkBuffer,
-          });
-
-          if (!response.ok) {
-            const err = await response.json().catch(() => ({ error: "Erreur serveur" }));
-            throw new Error(err.error || `Erreur partie ${i + 1}: HTTP ${response.status}`);
+          if (statusData.status === "done") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            // Fetch full result
+            const resultRes = await fetch(API_URL + "result/" + job_id);
+            const result = await resultRes.json();
+            setTranscription(result.text || "");
+            setSegments(result.segments || []);
+            setDuration(result.duration || 0);
+            if (result.translation) {
+              setTranslatedText(result.translation);
+              setShowTranslation(true);
+            }
+            setStatus("done");
+            setStatusMessage(`Transcription terminee ! (${result.device || "gpu"}, ${Math.round(result.processing_time || 0)}s)`);
+          } else if (statusData.status === "failed") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            throw new Error(statusData.error || "La transcription a echoue");
+          } else {
+            setStatusMessage(`Transcription GPU en cours... (${statusData.status})`);
           }
-
-          const result = await response.json();
-
-          if (result.segments) {
-            const offsetSegments = result.segments.map((seg) => ({
-              ...seg,
-              start: seg.start + cumulativeDuration,
-              end: seg.end + cumulativeDuration,
-            }));
-            allSegments = [...allSegments, ...offsetSegments];
-          }
-          allText += (result.text || "") + " ";
-          cumulativeDuration += result.duration || 0;
-
-          setTranscription(allText.trim());
-          setSegments([...allSegments]);
-          setDuration(cumulativeDuration);
+        } catch (err) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          setStatus("error");
+          setStatusMessage(`Erreur: ${err.message}`);
         }
-      }
+      }, 5000);
 
-      setStatus("done");
-      setStatusMessage("Transcription terminee !");
     } catch (err) {
       setStatus("error");
       setStatusMessage(`Erreur: ${err.message}`);
     }
   }, [file]);
 
-  // Auto-translate after transcription completes
-  useEffect(() => {
-    if (status === "done" && transcription && !translatedText) {
-      translateText();
-    }
-  }, [status, transcription]);
-
   const cancelTranscription = () => {
-    if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+    if (pollingRef.current) { clearInterval(pollingRef.current); pollingRef.current = null; }
     setStatus("idle");
     setStatusMessage("Annulé");
   };
@@ -402,29 +378,18 @@ export default function App() {
     setEditText("");
   };
 
-  // ===== TRANSLATION (via backend → NLLB) =====
+  // ===== TRANSLATION =====
   const translateText = async () => {
     if (!transcription) return;
     setTranslating(true);
     setShowTranslation(true);
-    setTranslatedText("");
-    const tgtLang = NLLB_LANG_CODES[translationLang] || "fra_Latn";
-    try {
-      const res = await fetch(API_URL + "api/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: transcription,
-          src_lang: "wol_Latn",
-          tgt_lang: tgtLang,
-        }),
-      });
-      if (!res.ok) throw new Error("Erreur traduction");
-      const data = await res.json();
-      setTranslatedText(data.translation_text || "[Pas de traduction]");
-    } catch {
-      setTranslatedText("[Erreur de traduction]");
+    if (translationLang === "fr" && segments.length > 0 && segments[0].translation) {
+      const fullTranslation = segments.map(s => s.translation).join(" ");
+      setTranslatedText(fullTranslation);
+      setTranslating(false);
+      return;
     }
+    setTranslatedText("[Traduction disponible uniquement en francais pour le moment]");
     setTranslating(false);
   };
 
@@ -596,7 +561,7 @@ export default function App() {
                 <Upload className="upload-icon" />
                 <h3>Déposez votre fichier audio ici</h3>
                 <p>ou cliquez pour sélectionner</p>
-                <span className="formats">MP3, WAV, M4A, OGG, FLAC, WebM, MP4, AAC — jusqu'à 5h</span>
+                <span className="formats">MP3, WAV, M4A, OGG, FLAC, WebM, MP4, AAC — jusqu'à 6h+</span>
               </div>
             ) : (
               <div className="file-info">
@@ -871,7 +836,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <p>Wolof Transcriber — Whisper Large-V3 fine-tuné sur 281h de wolof | Traduction NLLB</p>
+        <p>Wolof Transcriber — Whisper Large-V3 fine-tuné sur 281h | GPU acceleré | Traduction NLLB</p>
       </footer>
     </div>
   );

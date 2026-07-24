@@ -239,7 +239,7 @@ aws batch register-job-definition \
       {\"name\": \"S3_BUCKET\", \"value\": \"$S3_BUCKET\"}
     ]
   }" \
-  --retry-strategy '{"attempts": 3, "evaluateOnExit": [{"onExitCode": "137", "action": "RETRY"}, {"onExitCode": "1", "action": "EXIT"}, {"action": "RETRY"}]}' \
+  --retry-strategy '{"attempts": 3, "evaluateOnExit": [{"onExitCode": "137", "action": "RETRY"}, {"onStatusReason": "Host EC2*", "action": "RETRY"}, {"onExitCode": "0", "action": "EXIT"}, {"onExitCode": "1", "action": "EXIT"}]}' \
   --timeout '{"attemptDurationSeconds": 10800}' \
   --region $REGION > /dev/null
 echo "  wolof-transcribe-gpu (4 vCPU, 14GB, 1 GPU, 3h timeout, 3 retries on crash/spot)"
