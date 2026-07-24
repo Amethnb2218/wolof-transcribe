@@ -1,0 +1,12 @@
+version: 0.2
+phases:
+  pre_build:
+    commands:
+      - aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 335596040822.dkr.ecr.us-east-1.amazonaws.com
+  build:
+    commands:
+      - cd deploy-batch && docker build --platform linux/amd64 --no-cache -f Dockerfile.cpu -t wolof-asr-batch-cpu .
+  post_build:
+    commands:
+      - docker tag wolof-asr-batch-cpu:latest 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-batch-cpu:latest
+      - docker push 335596040822.dkr.ecr.us-east-1.amazonaws.com/wolof-asr-batch-cpu:latest
