@@ -26,7 +26,7 @@ import {
 import { jsPDF } from "jspdf";
 import "./App.css";
 
-const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6vc5h24e6d7pxjqyznfg4xwgzq0hjwww.lambda-url.us-east-1.on.aws/";
+const BATCH_API_URL = import.meta.env.VITE_API_URL || "";
 let API_URL = BATCH_API_URL;
 
 const SHORT_AUDIO_THRESHOLD = 50 * 1024 * 1024; // 50 MB (~10 min audio)

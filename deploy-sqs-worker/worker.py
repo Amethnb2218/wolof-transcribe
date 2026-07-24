@@ -290,13 +290,28 @@ def poll_kaggle_completion(job_id, receipt_handle, timeout_sec=1800):
     return False
 
 
-def process_job(message):
+def parse_sqs_message(message):
+    """Parse SQS message — supports both S3 event notification and manual format."""
     body = json.loads(message["Body"])
-    job_id = body["job_id"]
-    input_bucket = body["input_bucket"]
-    input_key = body["input_key"]
-    source_language = body.get("source_language", "wol")
-    target_language = body.get("target_language", "fra")
+
+    # S3 Event Notification format
+    if "Records" in body:
+        record = body["Records"][0]
+        input_bucket = record["s3"]["bucket"]["name"]
+        input_key = record["s3"]["object"]["key"]
+        # Extract job_id from key: uploads/{job_id}/{filename}
+        parts = input_key.split("/")
+        job_id = parts[1] if len(parts) >= 3 else input_key
+        return job_id, input_bucket, input_key
+
+    # Manual format (legacy)
+    return body["job_id"], body["input_bucket"], body["input_key"]
+
+
+def process_job(message):
+    job_id, input_bucket, input_key = parse_sqs_message(message)
+    source_language = "wol"
+    target_language = "fra"
     receipt_handle = message["ReceiptHandle"]
 
     print(f"Processing job {job_id}: s3://{input_bucket}/{input_key}", flush=True)
