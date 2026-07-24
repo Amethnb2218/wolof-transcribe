@@ -37,21 +37,27 @@ def lambda_handler(event, context):
     if method == "OPTIONS":
         return {"statusCode": 200, "headers": headers, "body": ""}
 
-    # POST /transcribe — proxy to mini-server
-    if method == "POST" and "/transcribe" in path:
-        body = event.get("body", "")
-        is_base64 = event.get("isBase64Encoded", False)
-        if is_base64:
-            audio_bytes = base64.b64decode(body)
-        else:
-            audio_bytes = body.encode() if isinstance(body, str) else body
+    # POST /transcribe-s3 — download from S3, send to mini-server
+    if method == "POST" and "/transcribe-s3" in path:
+        body = json.loads(event.get("body", "{}"))
+        job_id = body.get("job_id", "")
+        audio_key = body.get("audio_key", "")
+        if not audio_key:
+            return {"statusCode": 400, "headers": headers, "body": json.dumps({"error": "audio_key required"})}
 
-        content_type = event.get("headers", {}).get("content-type", "audio/mpeg")
+        # Download from S3
+        tmp_path = f"/tmp/{job_id}.audio"
+        s3.download_file(S3_BUCKET, audio_key, tmp_path)
+
+        # Send to mini-server
+        with open(tmp_path, "rb") as f:
+            audio_bytes = f.read()
+        os.unlink(tmp_path)
 
         req = urllib.request.Request(
             MINI_SERVER + "/",
             data=audio_bytes,
-            headers={"Content-Type": content_type},
+            headers={"Content-Type": "audio/mpeg"},
             method="POST",
         )
         try:

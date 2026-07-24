@@ -282,14 +282,32 @@ export default function App() {
   const jobIdRef = useRef(null);
 
   const transcribeViaMiniServer = async (audioFile) => {
-    setStatusMessage("Transcription instantanee...");
-    const arrayBuffer = await audioFile.arrayBuffer();
-    const response = await fetch(API_URL + "transcribe", {
+    // 1. Get presigned URL and upload to S3
+    setStatusMessage("Upload...");
+    const uploadRes = await fetch(API_URL + "upload", {
       method: "POST",
-      headers: { "Content-Type": audioFile.type || "audio/mpeg" },
-      body: arrayBuffer,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: audioFile.name, mode: "mini" }),
     });
-    if (!response.ok) throw new Error("Erreur serveur");
+    if (!uploadRes.ok) throw new Error("Erreur preparation upload");
+    const { job_id, upload_url } = await uploadRes.json();
+    jobIdRef.current = job_id;
+
+    const uploadToS3 = await fetch(upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": "audio/*" },
+      body: audioFile,
+    });
+    if (!uploadToS3.ok) throw new Error("Echec upload");
+
+    // 2. Tell Lambda to transcribe via mini-server
+    setStatusMessage("Transcription instantanee...");
+    const response = await fetch(API_URL + "transcribe-s3", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ job_id, audio_key: `uploads/${job_id}/audio.${audioFile.name.split('.').pop()}` }),
+    });
+    if (!response.ok) throw new Error("Erreur transcription");
     return await response.json();
   };
 
