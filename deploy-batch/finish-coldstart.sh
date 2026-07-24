@@ -1,62 +1,58 @@
 #!/bin/bash
-# Finish provisioned concurrency setup (step 2/3 that failed earlier)
+# Use EventBridge ping instead of Provisioned Concurrency (account limit too low)
 set -e
 
 REGION=us-east-1
 ACCOUNT=335596040822
-S3_BUCKET="wolof-transcriber-audio"
 
-echo "=== FINISH PROVISIONED CONCURRENCY ==="
+echo "=== WARMUP (EventBridge ping every 5 min) ==="
 
-echo "[1] Wait for Lambda to be ready..."
-aws lambda wait function-updated --function-name wolof-batch-trigger --region $REGION 2>/dev/null || true
-
-echo "[2] Provisioned Concurrency on trigger Lambda..."
-aws lambda put-provisioned-concurrency-config \
-  --function-name wolof-batch-trigger \
-  --qualifier 1 \
-  --provisioned-concurrent-executions 1 \
+echo "[1] Create warmup rule for trigger Lambda..."
+aws events put-rule \
+  --name wolof-trigger-warmup \
+  --schedule-expression "rate(5 minutes)" \
+  --state ENABLED \
   --region $REGION > /dev/null
-echo "  Done (version 1, 1 instance warm)"
-
-echo "[3] Create alias 'live'..."
-aws lambda create-alias \
-  --function-name wolof-batch-trigger \
-  --name live \
-  --function-version 1 \
-  --region $REGION 2>/dev/null || \
-aws lambda update-alias \
-  --function-name wolof-batch-trigger \
-  --name live \
-  --function-version 1 \
-  --region $REGION > /dev/null
-echo "  Alias 'live' -> version 1"
-
-echo "[4] Update S3 trigger to use alias..."
-ALIAS_ARN="arn:aws:lambda:$REGION:$ACCOUNT:function:wolof-batch-trigger:live"
 
 aws lambda add-permission \
   --function-name wolof-batch-trigger \
-  --qualifier live \
-  --statement-id s3-trigger-alias \
+  --statement-id eventbridge-warmup \
   --action lambda:InvokeFunction \
-  --principal s3.amazonaws.com \
-  --source-arn "arn:aws:s3:::$S3_BUCKET" \
+  --principal events.amazonaws.com \
+  --source-arn "arn:aws:events:$REGION:$ACCOUNT:rule/wolof-trigger-warmup" \
   --region $REGION 2>/dev/null || true
 
-aws s3api put-bucket-notification-configuration \
-  --bucket $S3_BUCKET \
-  --notification-configuration "{
-    \"LambdaFunctionConfigurations\": [{
-      \"LambdaFunctionArn\": \"$ALIAS_ARN\",
-      \"Events\": [\"s3:ObjectCreated:*\"],
-      \"Filter\": {\"Key\": {\"FilterRules\": [{\"Name\": \"prefix\", \"Value\": \"uploads/\"}]}}
-    }]
-  }" \
-  --region $REGION
-echo "  S3 trigger -> alias (provisioned concurrency active)"
+aws events put-targets \
+  --rule wolof-trigger-warmup \
+  --targets "Id=warmup,Arn=arn:aws:lambda:$REGION:$ACCOUNT:function:wolof-batch-trigger,Input=\"{\\\"source\\\":\\\"aws.events\\\"}\"" \
+  --region $REGION > /dev/null
+
+echo "  Done (ping every 5 min, no cold start)"
+
+echo ""
+echo "[2] Create warmup rule for API Lambda..."
+aws events put-rule \
+  --name wolof-api-warmup \
+  --schedule-expression "rate(5 minutes)" \
+  --state ENABLED \
+  --region $REGION > /dev/null
+
+aws lambda add-permission \
+  --function-name wolof-batch-api \
+  --statement-id eventbridge-warmup \
+  --action lambda:InvokeFunction \
+  --principal events.amazonaws.com \
+  --source-arn "arn:aws:events:$REGION:$ACCOUNT:rule/wolof-api-warmup" \
+  --region $REGION 2>/dev/null || true
+
+aws events put-targets \
+  --rule wolof-api-warmup \
+  --targets "Id=warmup,Arn=arn:aws:lambda:$REGION:$ACCOUNT:function:wolof-batch-api,Input=\"{\\\"source\\\":\\\"aws.events\\\"}\"" \
+  --region $REGION > /dev/null
+
+echo "  Done (ping every 5 min)"
 
 echo ""
 echo "=== DONE ==="
-echo "  No more cold starts on trigger Lambda"
-echo "  Cost: ~\$6/month"
+echo "  Both Lambdas stay warm (free, no extra cost)"
+echo "  Cold start eliminated"
