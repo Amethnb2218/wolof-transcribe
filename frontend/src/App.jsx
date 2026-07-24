@@ -29,7 +29,6 @@ import "./App.css";
 const BATCH_API_URL = import.meta.env.VITE_API_URL || "https://6zycjezzgfcjine4fhvsceohz40hetxs.lambda-url.us-east-1.on.aws/";
 let API_URL = BATCH_API_URL;
 
-const HF_SPACE_URL = import.meta.env.VITE_HF_SPACE_URL || "https://momosl-wolof-asr.hf.space";
 const SHORT_AUDIO_THRESHOLD = 50 * 1024 * 1024; // 50 MB (~10 min audio)
 
 const NLLB_LANG_CODES = {
@@ -282,32 +281,50 @@ export default function App() {
   const pollingRef = useRef(null);
   const jobIdRef = useRef(null);
 
-  const transcribeViaHFSpace = async (audioFile) => {
-    setStatusMessage("Transcription rapide (GPU)...");
-    const formData = new FormData();
-    formData.append("files", audioFile);
-
-    // Upload file to HF Space
-    const uploadRes = await fetch(HF_SPACE_URL + "/upload", {
-      method: "POST",
-      body: formData,
-    });
-    if (!uploadRes.ok) throw new Error("HF Space upload failed");
-    const uploadedFiles = await uploadRes.json();
-    const filePath = uploadedFiles[0];
-
-    // Call the transcribe_api endpoint via Gradio API
-    const predictRes = await fetch(HF_SPACE_URL + "/api/predict", {
+  const transcribeViaFargateCPU = async (audioFile) => {
+    setStatusMessage("Transcription en cours...");
+    const uploadRes = await fetch(API_URL + "upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        fn_index: 1,
-        data: [filePath],
-      }),
+      body: JSON.stringify({ filename: audioFile.name, mode: "sync" }),
     });
-    if (!predictRes.ok) throw new Error("HF Space transcription failed");
-    const predictData = await predictRes.json();
-    return predictData.data[0];
+    if (!uploadRes.ok) throw new Error("Erreur preparation upload");
+    const { job_id, upload_url } = await uploadRes.json();
+    jobIdRef.current = job_id;
+
+    const uploadToS3 = await fetch(upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": "audio/*" },
+      body: audioFile,
+    });
+    if (!uploadToS3.ok) throw new Error("Echec upload");
+
+    setStatusMessage("Transcription CPU en cours...");
+    // Poll with shorter interval for fast results
+    return new Promise((resolve, reject) => {
+      pollingRef.current = setInterval(async () => {
+        try {
+          const statusRes = await fetch(API_URL + "status/" + job_id);
+          const statusData = await statusRes.json();
+          if (statusData.status === "done") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            const resultRes = await fetch(API_URL + "result/" + job_id);
+            resolve(await resultRes.json());
+          } else if (statusData.status === "failed") {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+            reject(new Error(statusData.error || "Echec transcription"));
+          } else {
+            setStatusMessage(`Transcription en cours... (${statusData.status})`);
+          }
+        } catch (err) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+          reject(err);
+        }
+      }, 3000);
+    });
   };
 
   const transcribeViaKaggle = async (audioFile) => {
@@ -373,17 +390,18 @@ export default function App() {
       const isShortAudio = file.size < SHORT_AUDIO_THRESHOLD;
 
       if (isShortAudio) {
-        // Short audio → HF Space (fast, ~30 sec)
-        setStatusMessage("Transcription rapide (HF Space GPU)...");
-        const result = await transcribeViaHFSpace(file);
-        if (typeof result === "string") {
-          setTranscription(result);
-        } else {
-          setTranscription(result.text || "");
-          setSegments(result.segments || []);
+        // Short audio → Fargate CPU (fast for short files)
+        setStatusMessage("Transcription rapide...");
+        const result = await transcribeViaFargateCPU(file);
+        setTranscription(result.text || "");
+        setSegments(result.segments || []);
+        setDuration(result.duration || 0);
+        if (result.translation) {
+          setTranslatedText(result.translation);
+          setShowTranslation(true);
         }
         setStatus("done");
-        setStatusMessage("Transcription terminee ! (HF Space GPU, rapide)");
+        setStatusMessage(`Transcription terminee ! (${Math.round(result.processing_time || 0)}s)`);
       } else {
         // Long audio → Kaggle (supports 6h+)
         setStatusMessage("Audio long detecte — envoi vers Kaggle GPU...");
